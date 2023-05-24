@@ -33,12 +33,15 @@ For implementation-oriented RFCs (e.g. for compiler internals), this section sho
 /// returns those arguments collected into a tuple.
 ///
 ///     ╭─ declare variadic generic parameter
-///     │         ╭─ declare variadic function parameter
-///     │         │              ╭─ splat into tuple (type level)
-///   ╭─┴────╮  ╭─┴───────╮    ╭─┴───────╮
-fn id< ... Ts >( ... vs: T ) -> ( ... T ) {
+///     │          ╭─ declare variadic function parameter
+///     │          │                ╭─ splat into tuple (type level)
+///   ╭─┴─────╮  ╭─┴─────────╮    ╭─┴──────╮
+fn id< Ts @ .. >( vs @ .. : T ) -> ( .. T ) {
     // splat into tuple (value level)
-    ( ... vs )
+    // FIXME: ambiguity with `RangeFrom` -
+    // can only resolve after name resolution,
+    // which is not great.
+    ( .. vs )
 }
 
 #[test]
@@ -50,8 +53,8 @@ fn test_id() {
     assert_eq!((b"t u r b o", "f i s h"), id::<[u8; 9], &str>(b"t u r b o", "f i s h"));
 }
 
-fn id_at_least_one<H, ...Ts>(head: H, ...tail: Ts) -> (H, ...Ts) {
-    (head, ...tail)
+fn id_at_least_one<H, Ts @ ..>(head: H, tail @ ..: Ts) -> (H, ..Ts) {
+    (head, ..tail)
 }
 
 #[test]
@@ -65,16 +68,18 @@ fn test_id_at_least_one() {
 
 /// Returns a tuple wrapping all its arguments in `Some`.
 ///
-///                                       ╭─ Map each `T` to an `Option<T>`.
-///                                       │  Shorthand form: `...Option<Ts>`
-///                                     ╭─┴────────────────────╮
-fn option_wrap<...Ts>(...ts: Ts) -> (... for<T in Ts> Option<T> ) {
+///                                          ╭─ Map each `T` to an `Option<T>`.
+///                                          │  There is a shorthand/sugar form: `Option<Ts>`.
+///                                          │  Do we even have the long version then?
+///                                          │  It'll be discussed later
+///                                        ╭─┴────────────────────╮
+fn option_wrap<Ts @ ..>(ts @ ..: Ts) -> (.. for<T in Ts> Option<T> ) {
     // `for` loops over variaic function parameters
     // are expressions that evaluate to a tuple.
     // They do not support `break`, but you can `continue` with a value.
-    // FIXME this is highly bikesheddable. Should we use a separate keyword,
+    // FIXME: this is highly bikesheddable. Should we use a separate keyword,
     // like `static for`?
-    let wrapped: (...Option<Ts>) = for t in ts {
+    let wrapped: (..Option<Ts>) = for t in ts {
         Some(t)
     };
 
@@ -91,8 +96,8 @@ fn test_option_wrap() {
     assert_eq!((Some(b"t u r b o"), Some("f i s h")), option_wrap::<[u8; 9], &str>(b"t u r b o", "f i s h"));
 }
 
-fn swing_around<H, ...Ts>(head: H, ...tail: Ts) -> (...Ts, H) {
-    (...tail, head)
+fn swing_around<H, Ts @ ..>(head: H, tail @ ..: Ts) -> (..Ts, H) {
+    (..tail, head)
 }
 
 #[test]
@@ -104,8 +109,8 @@ fn test_swing_around() {
     assert_eq!(("f i s h", b"t u r b o"), swing_around::<[u8; 9], &str>(b"t u r b o", "f i s h"));
 }
 
-fn add_one_on<...Ts>(...ts: Ts) -> (...Ts, u32) {
-    (...ts, 17)
+fn add_one_on<Ts @ ..>(ts @ ..: Ts) -> (..Ts, u32) {
+    (..ts, 17)
 }
 
 #[test]
@@ -119,8 +124,8 @@ fn test_add_one_on() {
 
 ///         ╭─ Every type in the set must meet the bounds.
 ///         │  Shorthand for `where for<T in Ts> T: Default`
-///       ╭─┴──────╮
-fn bounds< ...Ts: Default >() -> (...Ts) {
+///       ╭─┴───────────────╮
+fn bounds< Ts @ .. : Default >() -> (..Ts) {
     // Type version of `static for` from earlier.
     // Evaluates to a tuple, just like before.
     // FIXME: this is really ugly, is there a better way?
@@ -139,44 +144,175 @@ fn test_bounds() {
 
 /* # Stuff that doesn't work
 
-fn doesnt_work<...T>(...a: T) -> T {
-    id_at_least_one(...a) // ERROR `id_at_least_one` expects at least one parameter
+fn doesnt_work<T @ ..>(a @ ..: T) -> T {
+    id_at_least_one(..a) // ERROR `id_at_least_one` expects at least one parameter
 } 
 
 // ERROR ambiguous variadic generics (where does one set end and the other start.?)
-fn doesnt_work_either<...T, ...U>() {}
+fn doesnt_work_either<T @ .., U @ ..>() {}
 
 // ERROR variadic function parameter must come at the end of the parameter list
 // (this restriction is not strictly necessary, but I think it makes things less confusing)
-fn nope<F, ...T>(...a: T, last: F) -> (...T, F) {
-    (...a, f)
+fn frontloaded<F, T @ ..>(a @ ..: T, last: F) -> (..T, F) {
+    (..a, f)
 }
 */
 
 // # Destructuring tuples
 
-fn add_one_on_2<H, ...Ts>(head: H, tail: (...Ts)) -> (...Ts, H) {
-    // You can "splat" tuples as if they were variadic arguments.
-    (...tail, head)
+fn add_one_on_2<H, Ts @ ..>(head: H, tail: (..Ts)) -> (..Ts, H) {
+    // `@` binding pattern with `..` on a tuple produces a variadic binding,
+    // that can be used like a variadic function parameter.
+    // FIXME: is this too verbose? 
+    let (tail @ ..) = tail;
+
+    (..tail, head)
 }
 
+// # ADTs and traits
+
+// ## Tuple structs
+// a lot of this syntax applies to plain old tuples too
+
+struct Tup<Ts @ ..>(i32, ..Ts);
+
+impl<Ts @ ..> Tup<..Ts> {
+    fn new(i: i32, ts @ ..: Ts) {
+        Self(i, ..ts)
+    }
+
+    fn destructure(&self) {
+        let Tup(ref head, ref tail @ ..) = self;
+        assert!(*head > 3);
+        for t in tail {h
+            println!("blah");
+        }
+    }
+}
+
+impl<Ts @ ..> Tup<i32, ..Ts> {
+    fn debug(&self) {
+        dbg!(self.0);
+        dbg!(self.1);
+        // dbg!(self.2); ERROR: that field might not exist
+    }
+}
+
+// `iter::Zip`
+
+pub struct Zip<Is @ ..> {
+    is: (..Is)
+}
+
+impl<Is @ ..> Zip<..Is> {
+    fn new(iters @ ..: Is) {
+        Self {
+            is: (..iters)
+        }
+    }
+}
+
+impl<Is @ ..> Iterator for Zip<..Is>
+where
+    Is: Iterator,
+{
+    // Short form of `(..for<I in Is> I::Item)`
+    type Item = (..Is::Item);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let (is @ ..) = self.is;
+        let next: Self::Item = for i in is { i.next()? };
+        Some(next)
+    }
+}
+
+// `futures::join`
+
+use  futures_util::future::{MaybeDone, maybe_done};
+
+#[pin_project::project]
+pub struct Join<Futs @ ..: Future> {
+    #[pin]
+    futs: (..MaybeDone<Futs>),
+}
+
+impl<Futs @ ..> Join<..Futs> {
+    fn new(futures @ ..: Futs) {
+        Self {
+            futs: for future in future {
+                maybe_done(future)
+            }
+        }
+    }
+}
+
+impl<Futs @ ..: Future> Future for Join<..Futs> {
+    type Output = (..Futs::Output);
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut all_done = true;
+
+        // FIXME: the ergonomics around pin projection need work.
+
+        let futs = self.futures.project();
+        let &mut (futs_mut @ .. ) = unsafe { self.futures.get_unchecked_mut() };
+
+        for fut in futs_mut {
+            let fut = unsafe { Pin::new_unchecked(&mut fut) };
+            all_done &= fut.poll(cx).is_ready();
+        }
+
+        if all_done {
+            let ready = for fut in futs_mut {
+                let fut = unsafe { Pin::new_unchecked(&mut fut) };
+                fut.take_output().unwrap()
+            };
+
+            Poll::Ready(ready)
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+// `FnOnce`
+
+trait FnOnce<Args @ ..> {
+    type Output;
+    fn call_once(self, args @ ..: Args) -> Self::Output;;
+}
+
+struct Foo;
+
+impl FnOnce<u32, i32, i32> for Foo {
+    type Output = u32;
+
+    // No variadics syntax here!
+    fn call_once(self, a: u32, b: i32, c: i32) -> u32 {
+        a + ((b + c) as u32)
+    }
+}
 
 // # Multiple sets of variadic parameters
 //
 // This is where things start getting tricky.
+// FIXME: do we need all of this?
+// Could we decide not to bother with this complexity—
+// or will that lead to API composability issues down the road?
 
 /// Takes a variadic set of mutable references to tuples,
 /// returns those arguments collected into a tuple.
 ///
-///                    ╭─ means "I accept some number of lifetimes,
-///                    │  then the same number of `T`s, then the same number of `U`s"
-///                    │  FIXME: ugly, needs bikeshed.
-///                  ╭─┴──────────╮
-fn unzip_mut_refs<...('as, Ts, Us) >(
-       // very ugly, but there is a shorthand: `&'as mut (Ts, Us)`
-    ...a: for<'a, T, U in 'as, Ts, Us> &'a mut (T, U)
-  // Shorthand here is `((...&'as mut Ts), (...&'as mut Us))`
-) -> ((... for<'a, T in 'as, Ts> &'a mut T),  (... for<'a, U in 'as, Us> &'a mut U)) {
+///                 ╭─ means "I accept some number of lifetimes,
+///                 │  then the same number of `T`s, then the same number of `U`s"
+///                 │  FIXME: ugly, needs bikeshed.
+///               ╭─┴───────────╮
+fn unzip_mut_refs< ('as, Ts, Us) @ ..>(
+         // very ugly, but there is a shorthand: `&'as mut (Ts, Us)`
+    a @ ..: for<'a, T, U in 'as, Ts, Us> &'a mut (T, U)
+  // Shorthand here is `((..&'as mut Ts), (..&'as mut Us))`
+) -> ((.. for<'a, T in 'as, Ts> &'a mut T),  (.. for<'a, U in 'as, Us> &'a mut U)) {
     let left = for &mut (t, _) in a {
         &mut t
     };
@@ -201,73 +337,28 @@ fn test_unzip_mut_refs() {
         unzip_mut_refs::<u32, bool, f64, &'static str, char, i32>(&mut a, &mut b, &mut c);
 }
 
-// # ADTs and traits
+trait Foo<T @ ..> {
+    fn join(&self, args @ ..: T);
+}
 
-// ## Tuple structs
-// a lot of this syntax applies to plain old tuples too
-
-struct Tup<...Ts>(i32, ...Ts);
-
-impl<...Ts> Tup<...Ts> {
-    fn new(i: i32, ...ts: Ts) {
-        Self(i, ...ts)
-    }
-
-    fn destructure(&self) {
-        let Tup(ref head, ref ...tail) = self;
-        assert!(*head > 3);
-        for t in tail {h
-            println!("blah");
+impl<'f, F: Debug, ('as, Ts: Debug, Us: Debug) @ ..> FooJoin<
+    &'f F,
+    ..for<'a, T in 'as, Ts> &'a T
+> for Tup<..Us> {
+    /// FIXME: ow my eyes
+    ///                        ╭─ new syntax: < > brackets enclose a list
+    ///                        │  of types, turns it into a variadic type set
+    ///                      ╭─┴────────────────────────────────────╮
+    fn join(&self, args @ ..: <&'f F, ..for<'a, T in 'as, Ts> &'a T> ) {
+        let Tup(ref us @ ..) = self;
+        for left, right in args, us {
+            dbg!(left);
+            dbg!(right);
         }
     }
 }
 
-impl<...Ts> Tup<i32, ...Ts> {
-    fn debug(&self) {
-        dbg!(self.0);
-        dbg!(self.1);
-        // dbg!(self.2); ERROR: that field might not exist
-    }
-}
-
-pub struct Zip<...Is> {
-    is: (...Is)
-}
-
-impl<...Is> Zip<...Is> {
-    fn new(...iters: Is) {
-        Zip::<...Is> {
-            is: (...iters)
-        }
-    }
-}
-
-impl<...I> Iterator for Zip<...I>
-where
-    I: Iterator,
-{
-    // Short form of `(...for<I>)`
-    type Item = (...I::Item);
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        let next: I::Item = self.i.next()?;
-        Some((...next))
-    }
-}
-
-//
-
-
-trait Foo<...T> {
-    fn frob(&self, ...ts: T) ;
-}
-
-// COns
-impl<...T, ...I> Foo<...T> for Zip<...I> {
-    fn frob(&)
-
-}
+fn nested
 ```
 
 This is the technical portion of the RFC. Explain the design in sufficient detail that:
