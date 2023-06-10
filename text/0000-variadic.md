@@ -29,19 +29,21 @@ For implementation-oriented RFCs (e.g. for compiler internals), this section sho
 ```rust
 // # Basic variadic functions
 
-/// Takes a variadic set of arguments,
+/// Takes a variadic set of type arguments,
 /// returns those arguments collected into a tuple.
-///
-///     ╭─ declare variadic generic parameter
-///     │          ╭─ declare variadic function parameter
-///     │          │                ╭─ splat into tuple (type level)
-///   ╭─┴─────╮  ╭─┴─────────╮    ╭─┴──────╮
-fn id< Ts @ .. >( vs @ .. : T ) -> ( .. T ) {
-    // splat into tuple (value level)
-    // FIXME: ambiguity with `RangeFrom` -
-    // can only resolve after name resolution,
-    // which is not great.
-    ( .. vs )
+/// Variadic value sets match the `..` pattern, `...` is the prefix splat operator.
+//
+//      ╭─ Declare variadic generic parameter of zero or more types.
+//      │          ╭─ Declare variadic function parameter of zero or more values.
+//      │          │                 ╭─ Splat (expand) into tuple (type level).
+//      │          │                 │  TODO: must trailing comma be necessary?
+//    ╭─┴─────╮  ╭─┴──────────╮    ╭─┴──────────╮
+fn id< Ts @ .. >( vs @ .. : Ts ) -> ( ... Ts , ) {
+    // `vs` is a variadic binding.
+    // The type of `vs` is the variadic typeset `Ts`.
+    // Notably, `vs` is *not* a tuple.
+    // However, it coerces to one (as long as every type in `Ts` is `Sized`).
+    vs
 }
 
 #[test]
@@ -53,8 +55,18 @@ fn test_id() {
     assert_eq!((b"t u r b o", "f i s h"), id::<[u8; 9], &str>(b"t u r b o", "f i s h"));
 }
 
-fn id_at_least_one<H, Ts @ ..>(head: H, tail @ ..: Ts) -> (H, ..Ts) {
-    (head, ..tail)
+/// Does tha same thing as `id`, but you have to pass in at least one value.
+//
+//                                                         ╭─ Trailing comma unnecessary
+//                                                         │  as preceding comma shows
+//                                                         │  this is a list
+//                                                       ╭─┴────────╮
+fn id_at_least_one<H, Ts @ ..>(head: H, tail @ ..: Ts) -> (H, ...Ts) {
+    //      ╭─ Use value-level splat operator to construct a tuple.
+    //      │  This prefix operator works on variadic bindings, tuples,
+    //      │  and tuple structs whose fields are all visible.
+    //    ╭─┴─────╮
+    (head, ...tail )
 }
 
 #[test]
@@ -67,25 +79,26 @@ fn test_id_at_least_one() {
 }
 
 /// Returns a tuple wrapping all its arguments in `Some`.
-///
-///                                          ╭─ Map each `T` to an `Option<T>`.
-///                                          │  There is a shorthand/sugar form: `Option<Ts>`.
-///                                          │  Do we even have the long version then?
-///                                          │  It'll be discussed later
-///                                        ╭─┴────────────────────╮
-fn option_wrap<Ts @ ..>(ts @ ..: Ts) -> (.. for<T in Ts> Option<T> ) {
-    // `for` loops over variaic function parameters
-    // are expressions that evaluate to a tuple.
-    // They do not support `break`, but you can `continue` with a value.
-    // FIXME: this is highly bikesheddable. Should we use a separate keyword,
-    // like `static for`?
-    let wrapped: (..Option<Ts>) = for t in ts {
+//
+//                                             ╭─ Map each `T` to an `Option<T>`.
+//                                             │  There is a shorthand/sugar form: `Option<Ts>`.
+//                                             │  Why do we even want a long version, you ask?
+//                                             │  That will be discussed later.
+//                                           ╭─┴────────────────────╮
+fn option_wrap<Ts @ ..>(ts @ ..: Ts) -> ( ... for<T in Ts> Option<T> , ) {
+    // `static for` loops over variadic bindings
+    // are expressions that evaluate to a variadic set of values.
+    // In this example, said value is immediately coerced to a tuple.
+    //
+    // Variadic `for` does not support `break`, but you can `continue` with a value.
+    //
+    // TODO: this is highly bikesheddable.
+    let wrapped: (...Option<Ts>,) = static for t in ts {
         Some(t)
     };
 
     return wrapped;
 }
-
 
 #[test]
 fn test_option_wrap() {
@@ -96,8 +109,8 @@ fn test_option_wrap() {
     assert_eq!((Some(b"t u r b o"), Some("f i s h")), option_wrap::<[u8; 9], &str>(b"t u r b o", "f i s h"));
 }
 
-fn swing_around<H, Ts @ ..>(head: H, tail @ ..: Ts) -> (..Ts, H) {
-    (..tail, head)
+fn swing_around<H, Ts @ ..>(head: H, tail @ ..: Ts) -> (...Ts, H) {
+    (...tail, head)
 }
 
 #[test]
@@ -109,8 +122,8 @@ fn test_swing_around() {
     assert_eq!(("f i s h", b"t u r b o"), swing_around::<[u8; 9], &str>(b"t u r b o", "f i s h"));
 }
 
-fn add_one_on<Ts @ ..>(ts @ ..: Ts) -> (..Ts, u32) {
-    (..ts, 17)
+fn add_one_on<Ts @ ..>(ts @ ..: Ts) -> (...Ts, u32) {
+    (...ts, 17)
 }
 
 #[test]
@@ -122,15 +135,13 @@ fn test_add_one_on() {
     assert_eq!((b"t u r b o", "f i s h", 17), add_one_on::<[u8; 9], &str>(b"t u r b o", "f i s h"));
 }
 
-///         ╭─ Every type in the set must meet the bounds.
+///         ╭─ Every type in the set must meet the trait bound.
 ///         │  Shorthand for `where for<T in Ts> T: Default`
 ///       ╭─┴───────────────╮
-fn bounds< Ts @ .. : Default >() -> (..Ts) {
+fn bounds< Ts @ .. : Default >() -> (...Ts,) {
     // Type version of `static for` from earlier.
-    // Evaluates to a tuple, just like before.
-    // FIXME: this is really ugly, is there a better way?
-    // Bkeshed welcome.
-    for<T in Ts> {
+    // TODO: `static for type`? needs bikeshed.
+    static for type T in Ts {
         T::default()
     }
 }
@@ -142,31 +153,37 @@ fn test_bounds() {
     assert_eq!((0, false), bounds::<u32, bool>());
 }
 
-/* # Stuff that doesn't work
+/// Yes, variadic parameters can come in front of non-variadic ones.
+fn assert_last_is_3<Ts @ .., Last: PartialEq<i32>>(tuple: (...Ts, Last)) -> (...Ts,) {
+    match tuple {
+        (front @ .., back) where back == 3 => front,
+        _ => pamic!("last element of tuple is not 3!"),
+    }
+}
 
-fn doesnt_work<T @ ..>(a @ ..: T) -> T {
-    id_at_least_one(..a) // ERROR `id_at_least_one` expects at least one parameter
-} 
+// # Stuff that doesn't work
 
 // ERROR ambiguous variadic generics (where does one set end and the other start.?)
-fn doesnt_work_either<T @ .., U @ ..>() {}
+// fn doesnt_work_either<Ts @ .., Us @ ..>() {}
 
-// ERROR variadic function parameter must come at the end of the parameter list
-// (this restriction is not strictly necessary, but I think it makes things less confusing)
-fn frontloaded<F, T @ ..>(a @ ..: T, last: F) -> (..T, F) {
-    (..a, f)
-}
-*/
+// ERROR variadic type parameters can't be combined with default type parameters
+// (though a vaiadic parameter can itself have a default.)
+// TODO this limitation could cause problems...
+//fn also_forbidden<Ts @ .., Defaulted = i32>() {}
 
 // # Destructuring tuples
 
-fn add_one_on_2<H, Ts @ ..>(head: H, tail: (..Ts)) -> (..Ts, H) {
+fn add_one_on_2<H, Ts @ ..>(head: H, tail: (...Ts,)) -> (...Ts, H) {
     // `@` binding pattern with `..` on a tuple produces a variadic binding,
     // that can be used like a variadic function parameter.
-    // FIXME: is this too verbose? 
     let (tail @ ..) = tail;
 
-    (..tail, head)
+    (...tail, head)
+}
+
+fn add_one_on_3<H, Ts @ ..>(head: H, tail: (...Ts,)) -> (...Ts, H) {
+    // can also splat tuples and tuple structs directly
+    (...tail, head)
 }
 
 // # ADTs and traits
@@ -174,55 +191,53 @@ fn add_one_on_2<H, Ts @ ..>(head: H, tail: (..Ts)) -> (..Ts, H) {
 // ## Tuple structs
 // a lot of this syntax applies to plain old tuples too
 
-struct Tup<Ts @ ..>(i32, ..Ts);
+struct Tup<Ts @ ..>(i32, ...Ts);
 
 impl<Ts @ ..> Tup<..Ts> {
     fn new(i: i32, ts @ ..: Ts) {
-        Self(i, ..ts)
+        Self(i, ...ts)
     }
 
     fn destructure(&self) {
         let Tup(ref head, ref tail @ ..) = self;
         assert!(*head > 3);
-        for t in tail {h
+        for t in tail {
             println!("blah");
         }
     }
 }
 
-impl<Ts @ ..> Tup<i32, ..Ts> {
+impl<Ts @ ..> Tup<i32, ...Ts> {
     fn debug(&self) {
         dbg!(self.0);
-        dbg!(self.1);
-        // dbg!(self.2); ERROR: that field might not exist
+        // dbg!(self.1); ERROR: that field might not exist
     }
 }
 
 // `iter::Zip`
 
 pub struct Zip<Is @ ..> {
-    is: (..Is)
+    is: (...Is,),
 }
 
-impl<Is @ ..> Zip<..Is> {
+impl<Is @ ..> Zip<...Is,> {
     fn new(iters @ ..: Is) {
         Self {
-            is: (..iters)
+            is: (...iters,)
         }
     }
 }
 
-impl<Is @ ..> Iterator for Zip<..Is>
+impl<Is @ ..> Iterator for Zip<...Is,>
 where
     Is: Iterator,
 {
-    // Short form of `(..for<I in Is> I::Item)`
-    type Item = (..Is::Item);
+    // Short form of `(...for<I in Is> I::Item,)`
+    type Item = (...Is::Item,);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let (is @ ..) = self.is;
-        let next: Self::Item = for i in is { i.next()? };
+        let next: Self::Item = for i in ...self.is { i.next()? };
         Some(next)
     }
 }
@@ -234,10 +249,10 @@ use  futures_util::future::{MaybeDone, maybe_done};
 #[pin_project::project]
 pub struct Join<Futs @ ..: Future> {
     #[pin]
-    futs: (..MaybeDone<Futs>),
+    futs: (...MaybeDone<Futs>,),
 }
 
-impl<Futs @ ..> Join<..Futs> {
+impl<Futs @ ..> Join<...Futs,> {
     fn new(futures @ ..: Futs) {
         Self {
             futs: for future in future {
@@ -247,16 +262,20 @@ impl<Futs @ ..> Join<..Futs> {
     }
 }
 
-impl<Futs @ ..: Future> Future for Join<..Futs> {
-    type Output = (..Futs::Output);
+impl<Futs @ ..: Future> Future for Join<...Futs,> {
+    type Output = (...Futs::Output,);
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut all_done = true;
 
-        // FIXME: the ergonomics around pin projection need work.
+        // TODO: the ergonomics around pin projection need work.
 
         let futs = self.futures.project();
-        let &mut (futs_mut @ .. ) = unsafe { self.futures.get_unchecked_mut() };
+
+        //                   ╭─ "inferred variadic params," variadic version of `_`.
+        //                   │  TODO: should trailing comma be required?
+        //                  ╭┴─╮
+        let futs_mut: &mut ( .. ,) = unsafe { self.futures.get_unchecked_mut() };
 
         for fut in futs_mut {
             let fut = unsafe { Pin::new_unchecked(&mut fut) };
@@ -285,10 +304,10 @@ trait FnOnce<Args @ ..> {
 
 struct Foo;
 
+// No variadic syntax here!
 impl FnOnce<u32, i32, i32> for Foo {
     type Output = u32;
 
-    // No variadics syntax here!
     fn call_once(self, a: u32, b: i32, c: i32) -> u32 {
         a + ((b + c) as u32)
     }
@@ -297,8 +316,8 @@ impl FnOnce<u32, i32, i32> for Foo {
 // # Multiple sets of variadic parameters
 //
 // This is where things start getting tricky.
-// FIXME: do we need all of this?
-// Could we decide not to bother with this complexity—
+// TODO: do we need all of this?
+// Could we decide not to support these cases—
 // or will that lead to API composability issues down the road?
 
 /// Takes a variadic set of mutable references to tuples,
@@ -306,13 +325,13 @@ impl FnOnce<u32, i32, i32> for Foo {
 ///
 ///                 ╭─ means "I accept some number of lifetimes,
 ///                 │  then the same number of `T`s, then the same number of `U`s"
-///                 │  FIXME: ugly, needs bikeshed.
+///                 │  TODO: needs bikeshed.
 ///               ╭─┴───────────╮
 fn unzip_mut_refs< ('as, Ts, Us) @ ..>(
          // very ugly, but there is a shorthand: `&'as mut (Ts, Us)`
     a @ ..: for<'a, T, U in 'as, Ts, Us> &'a mut (T, U)
-  // Shorthand here is `((..&'as mut Ts), (..&'as mut Us))`
-) -> ((.. for<'a, T in 'as, Ts> &'a mut T),  (.. for<'a, U in 'as, Us> &'a mut U)) {
+  // Shorthand here is `((...&'as mut Ts,), (...&'as mut Us,))`
+) -> ((...for<'a, T in 'as, Ts> &'a mut T,),  (...for<'a, U in 'as, Us> &'a mut U,)) {
     let left = for &mut (t, _) in a {
         &mut t
     };
@@ -341,15 +360,15 @@ trait Foo<T @ ..> {
     fn join(&self, args @ ..: T);
 }
 
-impl<'f, F: Debug, ('as, Ts: Debug, Us: Debug) @ ..> FooJoin<
+impl<'f, F: Debug, ('as, Ts: Debug, Us: Debug) @ ..> Foo<
     &'f F,
-    ..for<'a, T in 'as, Ts> &'a T
-> for Tup<..Us> {
-    /// FIXME: ow my eyes
+    ...for<'a, T in 'as, Ts> &'a T
+> for Tup<...Us,> {
     ///                        ╭─ new syntax: < > brackets enclose a list
     ///                        │  of types, turns it into a variadic type set
-    ///                      ╭─┴────────────────────────────────────╮
-    fn join(&self, args @ ..: <&'f F, ..for<'a, T in 'as, Ts> &'a T> ) {
+    ///                        │  TODO: ugly
+    ///                      ╭─┴─────────────────────────────────────╮
+    fn join(&self, args @ ..: <&'f F, ...for<'a, T in 'as, Ts> &'a T> ) {
         let Tup(ref us @ ..) = self;
         for left, right in args, us {
             dbg!(left);
