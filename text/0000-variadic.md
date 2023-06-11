@@ -1,69 +1,532 @@
-- Feature Name: (fill me in with a unique ident, `my_awesome_feature`)
-- Start Date: (fill me in with today's date, YYYY-MM-DD)
-- RFC PR: [rust-lang/rfcs#0000](https://github.com/rust-lang/rfcs/pull/0000)
-- Rust Issue: [rust-lang/rust#0000](https://github.com/rust-lang/rust/issues/0000)
+# Variadics design sketch
 
-# Summary
+## Use-cases we want to support
 
-One paragraph explanation of the feature.
+- `iter::zip`
+- `futures::join`
+- `Fn` traits
+- Implementing traits for tuples
+- `frunk`
+- `unsized_fn_params`
+  - But don't penalize `Sized` ergonomics to accomplish it.
+- `futures::select`?
+- Gateway drug to compile-time reflection/macro-free `derive`?
 
-# Motivation
+## Design principles
 
-Why are we doing this? What use cases does it support? What is the expected outcome?
+- Re-use existing language infrastructure and concepts when possible (tuples, pattern matching).
+  - But also, support library types!
+- Don't support only pre-determined special cases, support all the cases.
+  - Provide composable building blocks.
+  - Try to be flat when possible, but allow nesting when needed.
+  - Lifetime and const generics should be first-class citizens.
+  - "Complex is better than complicated."
+- Modular - try to have MVP-able subset, with confidence that it won't conflict with a more complete feature.
+- Try to keep simple cases simple.
+- "Explicit is better than implicit."
+  - No implicit iteration! Ugly loops are preferable to beautiful bugs.
+  - It should be clear whether an identifier refers to one thing or N things, wherever it is used.
 
-# Guide-level explanation
+## Prior art
 
-Explain the proposal as if it was already included in the language and you were teaching it to another Rust programmer. That generally means:
+- [C](https://en.cppreference.com/w/c/variadic)
+- [C++](https://en.cppreference.com/w/cpp/language/parameter_pack)
+- [D](https://dlang.org/spec/function.html#variadic)
+- [JavaScript](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Spread_syntax)
+- [PHP](https://www.php.net/manual/en/functions.arguments.php#functions.variable-arg-list)
+- [Ruby](https://docs.ruby-lang.org/en/3.2/syntax/calling_methods_rdoc.html#label-Array+to+Arguments+Conversion)
+- [Scala](https://docs.scala-lang.org/scala3/reference/changed-features/vararg-splices.html)
+- [Swift](https://github.com/apple/swift-evolution/blob/main/proposals/0393-parameter-packs.md)
+- [Zig](https://ziglang.org/documentation/master/#comptime)
 
-- Introducing new named concepts.
-- Explaining the feature largely in terms of examples.
-- Explaining how Rust programmers should *think* about the feature, and how it should impact the way they use Rust. It should explain the impact as concretely as possible.
-- If applicable, provide sample error messages, deprecation warnings, or migration guidance.
-- If applicable, describe the differences between teaching this to existing Rust programmers and new Rust programmers.
-- Discuss how this impacts the ability to read, understand, and maintain Rust code. Code is read and modified far more often than written; will the proposed feature make code easier to maintain?
+## Variadics and values
 
-For implementation-oriented RFCs (e.g. for compiler internals), this section should focus on how compiler contributors should think about the change, and give examples of its concrete impact. For policy RFCs, this section should provide an example-driven introduction to the policy, and explain its impact in concrete terms.
+### `...` operator
 
-# Reference-level explanation
+`...` ("splat") is a prefix operator that unpacks a parenthesized list of values. It operates on tuples, tuple structs, and arrays. (For tuple structs, all the fields must be visible at the location where `...` is invoked. Also, if the struct is marked `non_exhaustive`, then splatting only works within the defining crate.)
+
+TODO: should it be called "splat", "spread", or something else?
 
 ```rust
-// # Basic variadic functions
+let a: (i32, u32) = (3, 4);
+let b: (i32, u32, usize) = (...a, b);
+let c: (usize, i32, u32) = (b, ...a);
+struct Foo(bool, bool);
+let d: (bool, bool) = (...Foo(true, false),); // TODO: should trailing comma be required?
+let e: Foo = Foo(...d);
+let f: [i32, 3] = [1, ...[2, 3]];
+let g: (i32, i32, i32) = (1, ...(2, 3));
+let h: Foo: = Foo(...[true, false]);
+let i: [i32, 3] = [1, ...(2, 3)];
+```
 
-/// Takes a variadic set of type arguments,
-/// returns those arguments collected into a tuple.
-/// Variadic value sets match the `..` pattern, `...` is the prefix splat operator.
+### `...` pattern
+
+`...` can also be used in patterns. There, it serves as an alternative to `ident @ ..`.
+
+#### Arrays
+
+```rust
+let a: [i32, 3] = [1, 2, 3];
+let [...head, tail] = a;
+assert_eq!(head, [1, 2]);
+let [ref ...head, tail] = a;
+let _: &[i32; 2] = head;
+let [ref mut ...head, tail] = a;
+let _: &mut [i32; 2] = head;
+```
+
+#### Tuples
+
+`...ident` patterns also work with tuples.
+
+```rust
+let t: (i32, f64, &str) = (1, 2.0, "hi");
+let (...head, tail) = t;
+assert_eq!(head, (1, 2.0));
+```
+
+By-reference binding modes are a little special, owing to how tuples are stored in memory.
+
+```rust
+let t: (i32, f64, &str) = (1, 2.0, "hi");
+
+let (ref ...head, tail) = t;
+// Tuple of references, not reference to tuple
+let _: (&_, &_) = head;
+
+// Match ergonomics
+let &(...head, tail) = t;
+// Tuple of references, not reference to tuple
+let _: (&_, &_) = head;
+```
+
+TODO: extend `ident @ ..` patterns to support this?
+
+#### Tuple structs
+
+Same as tuples.
+
+```rust
+struct Foo(i32, f64, &str);
+
+let t: Foo = Foo(1, 2.0, "hi");
+let Foo(...head, tail) = t;
+assert_eq!(head, (1, 2.0));
+
+let Foo(ref ...head, tail) = t;
+let _: (&_, &_) = head;
+
+let &Foo(...head, tail) = t;
+let _: (&_, &_) = head;
+```
+
+### `static for` loop
+
+`static for` loops allow iterating over the elements of a splattable value (tuple, tuple struct, array).
+The loop is unrolled at compile-time.
+
+TODO: bikeshed.
+
+```rust
+let mut v: Vec<Box<dyn Debug>> = Vec::new();
+
+static for i in (2, "hi", 5.0) {
+    v.push(i);
+}
+
+dbg!(&v); // [2, "hi", 5.0]
+```
+
+```rust
+let mut v: Vec<i32> = Vec::new();
+let mut a = [2, 3, 5];
+
+static for i in a {
+    v.push(i);
+}
+
+dbg!(&v); // [2, 3, 5]
+```
+
+```rust
+let mut v: Vec<i32> = Vec::new();
+let mut a = [2, 3, 5];
+
+static for i in (...a, 4) {
+    v.push(i);
+}
+
+assert_eq!(v, [2, 3, 5, 4])
+```
+
+`static for` loops evaluate to a tuple.
+
+```rust
+let _: (Option<u32>, Option<bool>) = static for i in (42, false) {
+    Some(i)
+};
+```
+
+TODO: should `static for` over an array evaluate to an array instead?
+
+`static for` does not support `break`, but you can `continue` with a value.
+
+```rust
+let _: (Option<u32>, Option<bool>) = static for i in (42, false) {
+    if !pre_check() {
+        continue None;
+    }
+
+    Some(expensive_computation(i))
+};
+```
+
+`continue` with no value specified is equivalent to `continue ()`.
+
+```rust
+static for i in (42, false) {
+    if !pre_check() {
+        continue;
+    }
+
+    expensive_operation(i);
+}
+```
+
+## Variadics and types
+
+### Generic parameter syntax
+
+Today, generic parameter lists are necessarily flat. At the value level, we can use arrays, tuples, and slices to give structure to the parameters we pass in. But at the type level, this is not possible. More complex uses of variadics may need structured parameter lists, so we suggest syntax for it in the table below. However, the vast majority of cases will hopefully only use the first row in the table of proposed additions.
+
+| **Today's Rust**        | Declare                           | Fill            |
+|-------------------------|-----------------------------------|-----------------|
+| One type parameter      | `<T>`                             | `<i32>`         |
+| Two type parameters     | `<T, U>`                          | `<i32, usize>`  |
+| Two lifetime parameters | `<'a, 'b>`                        | `<'a, 'static>` |
+| Two const parameters    | `<const A: i32, const B: usize>`  | `<3, 5>`        |
+
+| **Proposed additions**                                                                       | Declare                                                         | Fill                                                                                             |
+|----------------------------------------------------------------------------------------------|-----------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
+| One list of zero or more type parameters (MVP needs only this)                               | `<...Ts>`                                                       | `<i32, u32, usize>`                                                                              |
+| Two lists of zero or more type parameters                                                    | `<<...Ts>, <...Us>>`                                            | `<<i32, u32, &str>, <u32, usize>>`                                                               |
+| Two lists of zero or more lifetime parameters                                                | `<<...'as>, <...'bs>>`                                          | `<<'static, '_>, <'a, 'b>>`                                                                      |
+| Two lists of zero or more const parameters                                                   | `<<...const As: i32>, <const Bs: u32>>`                         | `<<-1, 0, 1>, <42>>`                                                                             |
+| One list of groupings of one lifetime parameter, one type parameter, and one const parameter | `<...<'as, Ts: 'as, const Ns: Ts>>`                             | `<<'static, i32, -4>, <'_, bool, false>>`                                                        |
+| Putting it all together                                                                      | `<'a, ...'bs, ...Ts, ...<'a, T>, <...<Ts, Us>>, <...<Ts, Us>>>` | `<'static, '_, 'b, u32, i64, <'static, u32>, <'static, i32>>, <<u32, usize>, <i32, isize>>, <>>` |
+
+### `static for` over types, lifetimes, and consts
+
+`static for` can also be used to iterate over a block with a list of types, lifetimes, or consts.
+
+The examples in this section show how to use this feature with concrete types, but it is really meant for use with variadic generic types. Examples of that will come later.
+
+TODO: bikeshed.
+
+```rust
+let t: (usize, i32) = static for type T in <usize, i32> {
+    T::default();
+};
+
+assert_eq!(t, (0, 0))
+```
+
+```rust
+static for 'x in <'static, 'a> {
+    // Not much interesting you can do with only a lifetime...
+    // But these will get more useful in later examples.
+    let _: &'x i32 = &42;
+};
+```
+
+```rust
+let t: (usize, usize, usize) = static for const N: usize in <3, 17, 21> {
+    // Like with lifetimes, this only gets useful once you use it with generics.
+    N + 1
+};
+
+assert_eq!(t, (4, 18, 22));
+```
+
+```rust
+let t: (usize, i32, bool) = static for <type T, const N: T> in <<usize, 3>, <i32, -10>, <bool, true>> {
+    N
+};
+
+assert_eq!(t, (3, -10, true));
+```
+
+### Type-level `...`
+
+Type-level `...` unpacks a comma-separated list of types, lifetimes, or consts at the type level.
+
+This feature is meant for use with variadic generics, so the concrete examples will be underwheling.
+
+```rust
+//     ╭─ `(i32, u32)`, but written in an overly verbose fashion.
+//     │  TODO: should trailing comma be required?
+//    ╭┴───────────────╮
+let t: (...<i32, u32>,) = (2, 3);
+```
+
+```rust
+//     ╭─ `(i32, u32, usize)`, but written in an overly verbose fashion.
+//    ╭┴─────────────────────╮
+let t: (...<i32, u32>, isize) = (2, 3, -4);
+```
+
+### Type-level for-in
+
+Type-level for-in maps a comma-separated list of types, lifetimes, or consts to a new list of the same length, at the type level.
+
+Once again, for use with variadic generics, so the concrete examples will be underwheling.
+
+```rust
+//     ╭─ `(Option<i32>, Option<u32>)`, but written in an overly verbose fashion.
+//    ╭┴───────────────────────────────────╮
+let t: (...for<T in <i32, u32>> Option<T>,) == (Some(2), Some(3));
+```
+
+```rust
+//     ╭─ `([bool; 3], [bool; 12])`, but written in an overly verbose fashion.
+//    ╭┴─────────────────────────────────────────────╮
+let t: (...for<const N: usize in <8, 12>> [bool; N],) = ([false; 3], [false; 0]);
+```
+
+```rust
+//     ╭─ `([bool; 3], [char; 1])`, but written in an overly verbose fashion.
+//    ╭┴──────────────────────────────────────────────────────────────╮
+let t: (...for<<T, const N: usize> in <<bool, 3>, <char, 1>>> [T; N],) = ([false; 3], ['c']);
+```
+
+```rust
+//     ╭─ `(usize, (u32, i32, usize), (bool, char))`, but written in an overly verbose fashion.
+//    ╭┴───────────────────────────────────────────────────────────────────╮
+let t: (usize, ...for<...Ts in <<u32, i32, usize>, <bool, char>>> (...Ts,)) = (4, (1, 7, 4), (true, 'c'));
+```
+
+### Functions with variadic generic parameters
+
+Finally, the good stuff.
+
+This section will just be examples, showing how the concepts we've introduced so far fit together.
+
+```rust
+/// Takes a tuple and returns it unmodified.
 //
-//      ╭─ Declare variadic generic parameter of zero or more types.
-//      │          ╭─ Declare variadic function parameter of zero or more values.
-//      │          │                 ╭─ Splat (expand) into tuple (type level).
-//      │          │                 │  TODO: must trailing comma be necessary?
-//    ╭─┴─────╮  ╭─┴──────────╮    ╭─┴──────────╮
-fn id< Ts @ .. >( vs @ .. : Ts ) -> ( ... Ts , ) {
-    // `vs` is a variadic binding.
-    // The type of `vs` is the variadic typeset `Ts`.
-    // Notably, `vs` is *not* a tuple.
-    // However, it coerces to one (as long as every type in `Ts` is `Sized`).
+//     ╭─ Declare variadic generic parameter of zero or more types.
+//     │
+//     │             ╭─ A tuple of all the types in `Ts`.
+//     │             │
+//     │             ├─────────────╮
+//    ╭┴────╮       ╭┴───────╮    ╭┴───────╮  
+fn id< ...Ts >( vs : (...Ts,) ) -> (...Ts,) {
     vs
 }
 
 #[test]
 fn test_id() {
-    assert_eq!((), id());
-    assert_eq!((3,), id(3));
-    assert_eq!((42, "hello world"), id(42, "hello world"));
-    assert_eq!((false, false, 0), id(false, false, 0));
-    assert_eq!((b"t u r b o", "f i s h"), id::<[u8; 9], &str>(b"t u r b o", "f i s h"));
+    assert_eq!(id(()), ());
+    assert_eq!(id((3,)), (3,));
+    assert_eq!(id((42, "hello world")), (42, "hello world"),);
+    assert_eq!(id((false, false, 0)), (false, false, 0));
+    assert_eq!(id::<[u8; 9], &str>((b"t u r b o", "f i s h")), (b"t u r b o", "f i s h"));
+}
+```
+
+```rust
+/// Does the same thing as `id`, but the tuple must have arity at least 1.
+fn id_at_least_one<H, ...Ts>(tuple: (H, ...Ts)) -> (H, ...Ts) {
+    tuple
 }
 
-/// Does tha same thing as `id`, but you have to pass in at least one value.
+#[test]
+fn test_id_at_least_one() {
+    // assert_eq!(id_at_least_one((),), ()); ERROR expected at tuple of length at least one
+    assert_eq!(id_at_least_one(3), (3,));
+    assert_eq!(id_at_least_one((42, "hello world")), (42, "hello world"));
+    assert_eq!(id_at_least_one((false, false, 0)), (false, false, 0));
+    assert_eq!(id_at_least_one::<[u8; 9], &str>((b"t u r b o", "f i s h")), (b"t u r b o", "f i s h"));
+}
+```
+
+```rust
+/// Wraps all the elements of the input tuple in `Some`.
 //
-//                                                         ╭─ Trailing comma unnecessary
-//                                                         │  as preceding comma shows
-//                                                         │  this is a list
-//                                                       ╭─┴────────╮
-fn id_at_least_one<H, Ts @ ..>(head: H, tail @ ..: Ts) -> (H, ...Ts) {
+//                                           ╭─ Map each type `T` in the tuple to a corresponding `Option<T>`.
+//                                           │  Type-level for-in with generics.
+//                                          ╭┴─────────────────────╮
+fn option_wrap<...Ts>(vs : (...Ts,)) -> (... for<T in Ts> Option<T> ,) {
+    let wrapped: (...for<T in Ts> Option<T>,) = static for v in vs {
+        Some(v)
+    };
+
+    wrapped
+}
+
+#[test]
+fn test_option_wrap() {
+    assert_eq!(option_wrap(()), ());
+    assert_eq!(option_wrap((3,)), (Some(3),));
+    assert_eq!(option_wrap((42, "hello world")), (Some(42), Some("hello world")));
+    assert_eq!(option_wrap((false, false, 0)), (Some(false), Some(false), Some(0)));
+    assert_eq!(option_wrap::<[u8; 9], &str>((b"t u r b o", "f i s h")), (Some(b"t u r b o"), Some("f i s h")));
+}
+```
+
+```rust
+/// Move the first element of the tuple to the end.
+fn swing_around<H, ...Ts>((head, ...tail): (H, ...Ts)) -> (...Ts, H) {
+  //  ╭─ Use value-level splat operator to construct the tuple.
+  // ╭┴──────╮
+    ( ...tail , head)
+}
+
+#[test]
+fn test_swing_around() {
+    //swing_around(()); ERROR expected tuple of arity >= 1, found 0
+    assert_eq!(swing_around((3,)), (3,));
+    assert_eq!(swing_around((42, "hello world")), ("hello world", 42));
+    assert_eq!(swing_around((false, false, 0)), (0, false, false));
+    assert_eq!(swing_around::<[u8; 9], &str>((b"t u r b o", "f i s h")), ("f i s h", b"t u r b o"));
+}
+```
+
+```rust
+/// Push `17` onto the end of the tuple.
+fn add_one_on<...Ts>(vs : (...Ts,)) -> (...Ts, u32) {
+    (...vs, 17)
+}
+
+#[test]
+fn test_add_one_on() {
+    assert_eq!(add_one_on(()), (17,),);
+    assert_eq!(add_one_on((3,)), (3, 17));
+    assert_eq!(add_one_on((42, "hello world")), (42, "hello world", 17));
+    assert_eq!(add_one_on((false, false, 0)), (false, false, 0, 17));
+    assert_eq!(add_one_on::<[u8; 9], &str>((b"t u r b o", "f i s h")), (b"t u r b o", "f i s h", 17));
+}
+```
+
+```rust
+/// Return a tuple with the specified element types, generating each element value by calling `Default::default()`.
+//          ╭─ Every type in `Ts` must meet the `: Default` bound.
+//         ╭┴─────────────╮
+fn default< ...Ts: Default >() -> (...Ts,) {
+    // `static for` with variadic generic type.
+    static for type T in Ts {
+        T::default()
+    }
+}
+
+#[test]
+fn test_default() {
+    assert_eq!(default::<>(), ());
+    assert_eq!(default::<u32>(), (0,));
+    assert_eq!(default::<u32, bool>(), (0, false));
+}
+```
+
+Variadic generic parameters can come in front of non-variadic ones.
+
+```rust
+fn is_last_3<...Ts, Last: PartialEq<i32>>((...front, last): (...Ts, Last)) -> (...Ts, bool) {
+    (...front, last == 3)
+}
+
+#[test]
+fn test_is_last_3() {
+    assert_eq!(is_last_3(("yeah", "yeah", 3)), ("yeah", "yeah", true));
+}
+```
+
+```rust
+/// Returns `true` iff 3 is equal to every element of the given tuple.
+fn all_3<...Ts>(vs : (...Ts,)) -> bool
+where
+    /// Every type `T` in `Ts` meets the specified bound.
+    for<T in Ts> i32: PartialEq<T>,
+{
+    static for v in vs {
+        if 3_i32 != v {
+            return false;
+        }
+    }
+
+    true
+}
+
+#[test]
+fn test_all_3() {
+    assert_eq!(all_3(()), true);
+    assert_eq!(all_3((3, 3, 3)), true);
+    assert_eq!(all_3((3, 17, 3)), false);
+}
+```
+
+```rust
+/// Collect the provided const generic params into a `for` loop.
+fn collect_consts<...const Ns: usize>() -> (...for<const N: usize in Ns> usize,) {
+    static for const N: usize in Ns {
+        N
+    }
+}
+
+#[test]
+fn test_collect_consts() {
+    assert_eq!(collect_consts::<>(), ());
+    assert_eq!(collect_consts::<3, 8, 7>(), (3, 8, 7));
+}
+```
+
+### `...` patterns in function parameter lists
+
+Funv
+
+```rust
+
+/// Takes a variadic set of type arguments,
+/// returns those arguments collected into a tuple.
+//
+//                 ╭─ Declare variadic function parameter of zero or more values.
+//                 │  `vs` has tuple type. However, terms of calling convention,
+//                 │  the tuple is passed "destructured", as if each argument was separate.
+//                 │  If the callee is to use the tuple as a tuple, the callee
+//                 │  must reconstruct the tuple on its stack first.
+//                 │  (If the callee just needs to access individual fields, this reconstruction
+//                 │  is not performed, ensuring that simple variadics are a zero-cost abstraction.)
+//                 │
+//                 │
+//                 │
+//                 │  TODO: allow `vs @ ..` as alternative?
+//                 │
+//                ╭┴─────────╮ 
+fn collect<...Ts>( ...vs : Ts ) -> (...Ts,) {
+    // Return the tuple `vs`.
+    vs
+}
+
+#[test]
+fn test_collect() {
+    assert_eq!(collect(), ());
+    assert_eq!(collect(3), (3,));
+    assert_eq!(collect(42, "hello world"), (42, "hello world"),);
+    assert_eq!(collect(false, false, 0), (false, false, 0));
+    assert_eq!(collect::<[u8; 9], &str>(b"t u r b o", "f i s h"), (b"t u r b o", "f i s h"));
+}
+```
+
+```rust
+
+/// Does the same thing as `id`, but you have to pass in at least one value.
+//
+//                                                            ╭─ Type-level tuple
+//                                                            │  splat/flatten operator.
+//                                                           ╭┴──╮
+fn id_at_least_one<H, Ts @ ..>(head: H, tail @ ..: Ts) -> (H, ... Ts) {
     //      ╭─ Use value-level splat operator to construct a tuple.
-    //      │  This prefix operator works on variadic bindings, tuples,
+    //      │  This prefix operator works on tuples,
     //      │  and tuple structs whose fields are all visible.
     //    ╭─┴─────╮
     (head, ...tail )
@@ -71,29 +534,27 @@ fn id_at_least_one<H, Ts @ ..>(head: H, tail @ ..: Ts) -> (H, ...Ts) {
 
 #[test]
 fn test_id_at_least_one() {
-    // assert_eq!((), id_at_least_one()); ERROR expected at least 2 parameters, found 1
-    assert_eq!((3,), id_at_least_one(3));
-    assert_eq!((42, "hello world"), id_at_least_one(42, "hello world"));
-    assert_eq!((false, false, 0), id_at_least_one(false, false, 0));
-    assert_eq!((b"t u r b o", "f i s h"), id_at_least_one::<[u8; 9], &str>(b"t u r b o", "f i s h"));
+    // assert_eq!(id_at_least_one(), ()); ERROR expected at least 2 parameters, found 1
+    assert_eq!(id_at_least_one(3), (3,));
+    assert_eq!(id_at_least_one(42, "hello world"), (42, "hello world"));
+    assert_eq!(id_at_least_one(false, false, 0), (false, false, 0));
+    assert_eq!(id_at_least_one::<[u8; 9], &str>(b"t u r b o", "f i s h"), (b"t u r b o", "f i s h"));
 }
 
 /// Returns a tuple wrapping all its arguments in `Some`.
 //
-//                                             ╭─ Map each `T` to an `Option<T>`.
-//                                             │  There is a shorthand/sugar form: `Option<Ts>`.
-//                                             │  Why do we even want a long version, you ask?
-//                                             │  That will be discussed later.
-//                                           ╭─┴────────────────────╮
-fn option_wrap<Ts @ ..>(ts @ ..: Ts) -> ( ... for<T in Ts> Option<T> , ) {
-    // `static for` loops over variadic bindings
-    // are expressions that evaluate to a variadic set of values.
-    // In this example, said value is immediately coerced to a tuple.
+//                                      ╭─ Map each type `T` in the tuple to a corresponding `Option<T>`.
+//                                      │  This type-level for-in operator evaluates to a tuple type.
+//                                      │  TODO: bikeshed syntax.
+//                                     ╭┴─────────────────────╮
+fn option_wrap<Ts @ ..>(ts @ ..: Ts) -> for<T in Ts> Option<T> {
+    // `static for` loops over tuples and tuple structs
+    // are expressions that evaluate to a tuple.
     //
     // Variadic `for` does not support `break`, but you can `continue` with a value.
     //
-    // TODO: this is highly bikesheddable.
-    let wrapped: (...Option<Ts>,) = static for t in ts {
+    // TODO: bikeshed syntax.
+    let wrapped: for<T in Ts> Option<T> = static for t in ts {
         Some(t)
     };
 
@@ -102,11 +563,11 @@ fn option_wrap<Ts @ ..>(ts @ ..: Ts) -> ( ... for<T in Ts> Option<T> , ) {
 
 #[test]
 fn test_option_wrap() {
-    assert_eq!((), option_wrap());
-    assert_eq!((Some(3),), option_wrap(3));
-    assert_eq!((Some(42), Some("hello world")), option_wrap(42, "hello world"));
-    assert_eq!((Some(false), Some(false), 0), id_at_least_one(false, false, 0));
-    assert_eq!((Some(b"t u r b o"), Some("f i s h")), option_wrap::<[u8; 9], &str>(b"t u r b o", "f i s h"));
+    assert_eq!(option_wrap(), ());
+    assert_eq!(option_wrap(3), (Some(3),));
+    assert_eq!(option_wrap(42, "hello world"), (Some(42), Some("hello world")));
+    assert_eq!(id_at_least_one(false, false, 0), (Some(false), Some(false), Some(0)));
+    assert_eq!(option_wrap::<[u8; 9], &str>(b"t u r b o", "f i s h"), (Some(b"t u r b o"), Some("f i s h")));
 }
 
 fn swing_around<H, Ts @ ..>(head: H, tail @ ..: Ts) -> (...Ts, H) {
@@ -116,10 +577,10 @@ fn swing_around<H, Ts @ ..>(head: H, tail @ ..: Ts) -> (...Ts, H) {
 #[test]
 fn test_swing_around() {
     // assert_eq!((), swing_around()); ERROR expected at least 2 parameters, found 1
-    assert_eq!((3,), swing_around(3));
-    assert_eq!(("hello world", 42), swing_around(42, "hello world"));
-    assert_eq!((0, false, false), swing_around(false, false, 0));
-    assert_eq!(("f i s h", b"t u r b o"), swing_around::<[u8; 9], &str>(b"t u r b o", "f i s h"));
+    assert_eq!(swing_around(3), (3,));
+    assert_eq!(swing_around(42, "hello world"), ("hello world", 42));
+    assert_eq!(swing_around(false, false, 0), (0, false, false));
+    assert_eq!(swing_around::<[u8; 9], &str>(b"t u r b o", "f i s h"), ("f i s h", b"t u r b o"));
 }
 
 fn add_one_on<Ts @ ..>(ts @ ..: Ts) -> (...Ts, u32) {
@@ -128,19 +589,21 @@ fn add_one_on<Ts @ ..>(ts @ ..: Ts) -> (...Ts, u32) {
 
 #[test]
 fn test_add_one_on() {
-    assert_eq!((17,), add_one_on());
-    assert_eq!((3, 17), add_one_on(3));
-    assert_eq!((42, "hello world", 17), add_one_on(42, "hello world"));
-    assert_eq!((false, false, 0, 17), add_one_on(false, false, 0));
-    assert_eq!((b"t u r b o", "f i s h", 17), add_one_on::<[u8; 9], &str>(b"t u r b o", "f i s h"));
+    assert_eq!(add_one_on(), (17,),);
+    assert_eq!(add_one_on(3), (3, 17));
+    assert_eq!(add_one_on(42, "hello world"), (42, "hello world", 17));
+    assert_eq!(add_one_on(false, false, 0), (false, false, 0, 17));
+    assert_eq!(add_one_on::<[u8; 9], &str>(b"t u r b o", "f i s h"), (b"t u r b o", "f i s h", 17));
 }
 
-///         ╭─ Every type in the set must meet the trait bound.
-///         │  Shorthand for `where for<T in Ts> T: Default`
-///       ╭─┴───────────────╮
-fn bounds< Ts @ .. : Default >() -> (...Ts,) {
-    // Type version of `static for` from earlier.
-    // TODO: `static for type`? needs bikeshed.
+
+fn bounds<Ts @ ..>() -> Ts
+where
+    // TODO: bikeshed syntax.
+    for<T in Ts> T: Default
+{
+    // Like `static for` from earlier, but over a set of types instead of values.
+    // TODO: bikeshed syntax.
     static for type T in Ts {
         T::default()
     }
@@ -148,28 +611,23 @@ fn bounds< Ts @ .. : Default >() -> (...Ts,) {
 
 #[test]
 fn test_bounds() {
-    assert_eq!((), bounds());
-    assert_eq!((0,), bounds::<u32>());
-    assert_eq!((0, false), bounds::<u32, bool>());
+    assert_eq!(bounds::<>(), ());
+    assert_eq!(bounds::<u32>(), (0,));
+    assert_eq!(bounds::<u32, bool>(), (0, false));
 }
 
 /// Yes, variadic parameters can come in front of non-variadic ones.
-fn assert_last_is_3<Ts @ .., Last: PartialEq<i32>>(tuple: (...Ts, Last)) -> (...Ts,) {
-    match tuple {
-        (front @ .., back) where back == 3 => front,
-        _ => pamic!("last element of tuple is not 3!"),
-    }
+fn is_last_3<Ts @ .., Last: PartialEq<i32>>(tuple @ ..: Ts, last: Last) -> (...Ts, bool) {
+    (...tuple, last == 3)
 }
 
-// # Stuff that doesn't work
+#[test]
+fn test_is_last_3() {
+    assert_eq!(is_last_3("yeah", "yeah", 3), ("yeah", "yeah", true));
+}
 
 // ERROR ambiguous variadic generics (where does one set end and the other start.?)
-// fn doesnt_work_either<Ts @ .., Us @ ..>() {}
-
-// ERROR variadic type parameters can't be combined with default type parameters
-// (though a vaiadic parameter can itself have a default.)
-// TODO this limitation could cause problems...
-//fn also_forbidden<Ts @ .., Defaulted = i32>() {}
+// fn doesnt_work<Ts @ .., Us @ ..>() {}
 
 // # Destructuring tuples
 
@@ -379,64 +837,3 @@ impl<'f, F: Debug, ('as, Ts: Debug, Us: Debug) @ ..> Foo<
 
 fn nested
 ```
-
-This is the technical portion of the RFC. Explain the design in sufficient detail that:
-
-- Its interaction with other features is clear.
-- It is reasonably clear how the feature would be implemented.
-- Corner cases are dissected by example.
-
-The section should return to the examples given in the previous section, and explain more fully how the detailed proposal makes those examples work.
-
-# Drawbacks
-
-Why should we *not* do this?
-
-# Rationale and alternatives
-
-- Why is this design the best in the space of possible designs?
-- What other designs have been considered and what is the rationale for not choosing them?
-- What is the impact of not doing this?
-- If this is a language proposal, could this be done in a library or macro instead? Does the proposed change make Rust code easier or harder to read, understand, and maintain?
-
-# Prior art
-
-Discuss prior art, both the good and the bad, in relation to this proposal.
-A few examples of what this can include are:
-
-- For language, library, cargo, tools, and compiler proposals: Does this feature exist in other programming languages and what experience have their community had?
-- For community proposals: Is this done by some other community and what were their experiences with it?
-- For other teams: What lessons can we learn from what other communities have done here?
-- Papers: Are there any published papers or great posts that discuss this? If you have some relevant papers to refer to, this can serve as a more detailed theoretical background.
-
-This section is intended to encourage you as an author to think about the lessons from other languages, provide readers of your RFC with a fuller picture.
-If there is no prior art, that is fine - your ideas are interesting to us whether they are brand new or if it is an adaptation from other languages.
-
-Note that while precedent set by other languages is some motivation, it does not on its own motivate an RFC.
-Please also take into consideration that rust sometimes intentionally diverges from common language features.
-
-# Unresolved questions
-
-- What parts of the design do you expect to resolve through the RFC process before this gets merged?
-- What parts of the design do you expect to resolve through the implementation of this feature before stabilization?
-- What related issues do you consider out of scope for this RFC that could be addressed in the future independently of the solution that comes out of this RFC?
-
-# Future possibilities
-
-Think about what the natural extension and evolution of your proposal would
-be and how it would affect the language and project as a whole in a holistic
-way. Try to use this section as a tool to more fully consider all possible
-interactions with the project and language in your proposal.
-Also consider how this all fits into the roadmap for the project
-and of the relevant sub-team.
-
-This is also a good place to "dump ideas", if they are out of scope for the
-RFC you are writing but otherwise related.
-
-If you have tried and cannot think of any future possibilities,
-you may simply state that you cannot think of anything.
-
-Note that having something written down in the future-possibilities section
-is not a reason to accept the current or a future RFC; such notes should be
-in the section on motivation or rationale in this or subsequent RFCs.
-The section merely provides additional information.
