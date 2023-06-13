@@ -6,6 +6,7 @@
 - [x] [`futures::join`](https://docs.rs/futures/latest/futures/future/fn.join.html)
 - [x] [`Fn` traits](https://doc.rust-lang.org/std/ops/trait.FnOnce.html) ([GitHub issue](https://github.com/rust-lang/rust/issues/41058))
 - [x] Implementing traits for tuples ([stdlib](https://doc.rust-lang.org/std/primitive.tuple.html#trait-implementations), [Sourcegraph](https://sourcegraph.com/search?q=context:global+lang:Rust+impl%5B+%3C%5D+.*+for+%5C%28&patternType=regexp&sm=0&groupBy=repo))
+- [x] Implementing traits for function pointers/`dyn Fn` ([stdlib](https://doc.rust-lang.org/std/primitive.fn.html#trait-implementations), [`wasm-bindgen`](https://github.com/rustwasm/wasm-bindgen/blob/f569fddb62cdeb2bb9ba230fe59d3fba143cf92c/src/convert/closures.rs))
 - [x] `#![feature(unsized_fn_params)]`
   - But don't penalize `Sized` ergonomics to accomplish it.
 - [ ] [`frunk::HList`](https://docs.rs/frunk/latest/frunk/hlist/index.html)
@@ -58,8 +59,8 @@ TODO: should it be called "splat", "spread", or something else?
 
 ```rust
 let a: (i32, u32) = (3, 4);
-let b: (i32, u32, usize) = (...a, b);
-let c: (usize, i32, u32) = (b, ...a);
+let b: (i32, u32, usize) = (...a, 1);
+let c: (usize, i32, u32) = (1, ...a);
 struct Foo(bool, bool);
 let d: (bool, bool) = (...Foo(true, false),); // TODO: should trailing comma be required?
 let e: Foo = Foo(...d);
@@ -150,7 +151,7 @@ TODO: bikeshed syntax.
 let mut v: Vec<Box<dyn Debug>> = Vec::new();
 
 static for i in (2, "hi", 5.0) {
-    v.push(i);
+    v.push(Box::new(i));
 }
 
 dbg!(&v); // [2, "hi", 5.0]
@@ -252,6 +253,8 @@ assert_eq!(t, ((-1, 1), (-2, 2), (-3, 3)));
 
 ## Variadics and types
 
+
+
 ### Generic parameter syntax
 
 Today, generic parameter lists are necessarily flat. At the value level, we can use arrays and tuples, to give structure to the parameters we pass in. But at the type level, this is not possible. More complex uses of variadics may need structured parameter lists, so we suggest syntax for it in the table below. However, the majority of cases will hopefully only use the first row in the table of proposed additions.
@@ -327,7 +330,7 @@ assert_eq!(t, ((1, false), (2, 0), (1, 0)));
 
 Type-level `...` unpacks a comma-separated list of types, lifetimes, or consts at the type level.
 
-This feature is meant for use with variadic generics, so the concrete examples below will be underwheling.
+This feature is meant for use with variadic generics, so the concrete examples below will be underwhelming.
 
 ```rust
 //     ╭─ `(i32, u32)`, but written in an overly verbose fashion.
@@ -346,7 +349,7 @@ let t: (...<i32, u32>, isize) = (2, 3, -4);
 
 Type-level for-in maps a comma-separated list of types, lifetimes, or consts to a new list of the same length, at the type level.
 
-Once again, for use with variadic generics, so the concrete examples below will be underwheling.
+Once again, for use with variadic generics, so the concrete examples below will be underwhelming.
 
 ```rust
 //     ╭─ `(Option<i32>, Option<u32>)`, but written in an overly verbose fashion.
@@ -383,6 +386,7 @@ let a: Option<_> = Some(3_u32);
 With this proposal, you can use `..` to infer a list of type parameters.
 
 ```rust
+// `..` is equivalent to `_, _` below
 let tup: (usize, ..) = (3, false, "hello");
 ```
 
@@ -824,13 +828,104 @@ pub fn unzip<...<Ts, Us>>(zipped: (...for<<T, U> in <Ts, Us>> (T, U),) -> ((...f
 }
 ```
 
+### TODO: `match` and recursion
+
+`static for` is not the only way to loop over a tuple. You can also use recursion, with `match`.
+
+```rust
+/// Debug-print every element of the tuple.
+fn recursive_dbg<...Ts: Debug>(ts: (...Ts,)) {
+    match ts {
+        () => (),
+        (head, ...tail) => {
+            print!("{head:?}, ");
+            recursive_dbg(tail);
+        }
+    }
+}
+```
+
+Recursion also allows iterating in a different order.
+
+```rust
+/// Debug-print every element of the tuple, in reverse order.
+fn recursive_dbg<...Ts: Debug>(ts: (...Ts,)) {
+    match ts {
+        () => (),
+        (...head, tail) => {
+            print!("{tail:?}, ");
+            recursive_dbg(head);
+        }
+    }
+}
+```
+
+However, how do we express this recursion at the type level?
+
+```rust
+/// Reverse the order of the elements in the tuple.
+fn reverse_tuple<...Ts: Debug>(ts: (...Ts,)) -> _ /* what do we put here? */ {
+    match ts {
+        () => (),
+        (head, ...tail) => {
+           (...reverse_tuple(tail), head)
+        }
+    }
+}
+```
+
+A more generalized type-level recursion mechanism/`match` would be the most flexible option, but also complex. Alternatively, we could have a set of primitives, like `Rotate<...T>` or `Reverse<...T>`, for type-level operations. Also, what restrictions would need to be imposed to make type inference tractable, and avoid post-monomorphization errors? How would unification work?
+
+It's also not clear how the `match` + recursion approach could be applied to iterating over types/lifetimes/consts at the value level.
+
+#### Type-level `match`
+
+What might type-level `match` look like?
+
+```rust
+...type Reverse<...Ts> = match Ts <
+    // Restriction: lifetimes can't affect which branch is taken, otherwise you would have unsound specialization
+    <> => <>,
+    <Head, ...Tail> => <...Reverse<Tail>, Head>,
+>;
+
+/// Reverse the order of the elements in the tuple.
+fn reverse_tuple<...Ts: Debug>(ts: (...Ts,)) -> (...Reverse<...Ts>) {
+    match ts {
+        () => (),
+        (head, ...tail) => {
+           (...reverse_tuple(tail), head)
+        }
+    }
+}
+```
+
+### TODO: Pack length constraints
+
+It would be desirable to allow constraining the length of a generic parameter pack. For example, to write a generalized MxN → NxM nested tuple transformation, you need to assert that all the inner tuples are of the same length. Speculative syntax:
+
+```rust
+/// Tranform MxN tuple into NxM
+//                                   ╭─ Each `Ts` in `Tss` has `N` elements
+//                                  ╭┴╮
+fn pivot<const N: usize, ...<...Tss; N >>(tuples: (...for<Ts in Tss> (...Ts,),)) {
+    static for ...t in ...tuples {
+        t
+    }
+}
+```
+
+### TODO: Random access
+
+It would be nice to have a way to express "get the `N`th value of this tuple, if it exists", where `N` is a const generic parameter. One would also need a type-level equivalent for generic parameter packs.
+
+### TODO: Variadic variant lists with enums
+
+With APIs like `futures::select`, you want to pass in N values, and get back a value corresponding to one of the `N` arguments. [Yoshua Wuyt's blog posts](https://blog.yoshuawuyts.com/more-enum-types/) explore this in detail. To support this case, one might want enum types whose variats correspnd to variadic generic parameters. But perhaps the additional complexity is not necessary; for example, in `futures::select` we could instead ask the caller to wrap the result type of their futures in an enm they define.
+
 ## TODO
 
 - [ ] Add additional advanced examples
-- [ ] Discuss what this proposal doesn't handle, sketch out possible solutions
-  - [ ] Iteration in non-default order (ex: reversing elements of a tuple)
-  - [ ] Enums with a variadic list of variants (for example, `futures::select` return value)
-  - [ ] Generalized MxN → NxM transformation
-  - [ ] Tuple random access (get Nth element if it exists)
 - [ ] Come up with nomenclature ("comma-separated list of things" is not exactly Shakespearean eloquence)
 - [ ] Resolve inline bikeshed TODOs
+- [ ] Lifetime elision
