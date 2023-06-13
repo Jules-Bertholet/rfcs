@@ -28,7 +28,7 @@
 - Try to keep simple cases simple.
 - "Explicit is better than implicit."
   - No implicit iteration! Ugly loops are preferable to beautiful bugs.
-  - It should be clear whether an identifier refers to one thing or N things, wherever it is used.
+  - It should be hopefully be clear whether an identifier refers to one thing or N things, wherever it is used.
 
 ## Prior art
 
@@ -53,9 +53,9 @@
 
 ### `...` operator
 
-`...` ("splat") is a prefix operator that unpacks a parenthesized list of values. It operates on tuples, tuple structs, arrays, and references to them. (For tuple structs, all the fields must be visible at the location where `...` is invoked. Also, if the struct is marked `non_exhaustive`, then splatting only works within the defining crate.)
+`...` ("unpack") is a prefix operator that unpacks a parenthesized list of values. It operates on tuples, tuple structs, arrays, and references to them. (For tuple structs, all the fields must be visible at the location where `...` is invoked. Also, if the struct is marked `non_exhaustive`, then unpacking only works within the defining crate.)
 
-TODO: should it be called "splat", "spread", or something else?
+TODO: should it be called "unpack", "splat", "spread", or something else?
 
 ```rust
 let a: (i32, u32) = (3, 4);
@@ -70,7 +70,7 @@ let h: Foo: = Foo(...[true, false]);
 let i: [i32, 3] = [1, ...(2, 3)];
 ```
 
-Splatting a reference results in references.
+Unpacking a reference results in references.
 
 ```rust
 let j: (i32, &usize, &bool) = (3, ...&(4, false));
@@ -143,7 +143,7 @@ let _: (&_, &_) = head;
 
 ### `static for` loop
 
-`static for` loops allow iterating over the elements of a splattable value (tuple, tuple struct, array, references to these). The loop is unrolled at compile-time.
+`static for` loops allow iterating over the elements of am unpackable value (tuple, tuple struct, array, references to these). The loop is unrolled at compile-time.
 
 TODO: bikeshed syntax.
 
@@ -223,7 +223,7 @@ static for i in (42, false) {
 }
 ```
 
-You can `static for` over multiple splattable values at once, as long as they are the same length.
+You can `static for` over multiple unpackable values at once, as long as they are the same length.
 
 ```rust
 let t: ((i8, u8), (i16, u16), (i32, u32)) = static for i, u in (-1, -2, -3), (1, 2, 3) {
@@ -231,6 +231,11 @@ let t: ((i8, u8), (i16, u16), (i32, u32)) = static for i, u in (-1, -2, -3), (1,
 };
 
 assert_eq!(t, ((-1, 1), (-2, 2), (-3, 3)));
+```
+
+```rust
+// ERROR incompatible lengths
+// static for i, u in (-1, -2, -3), (1, 3) {};
 ```
 
 `...` patterns can also be used for working with multiple values at once. When used after `for`, the resulting binding has tuple type.
@@ -253,82 +258,48 @@ assert_eq!(t, ((-1, 1), (-2, 2), (-3, 3)));
 
 ## Variadics and types
 
+### Generic argument packs
 
+A **generic argument** is a type, lifetime, or constant. A **generic argument pack** is a comma-separated list of zero or more generic arguments, including nested packs. Lifetimes in a pack must be listed first.
 
-### Generic parameter syntax
+Examples of generic argument packs:
 
-Today, generic parameter lists are necessarily flat. At the value level, we can use arrays and tuples, to give structure to the parameters we pass in. But at the type level, this is not possible. More complex uses of variadics may need structured parameter lists, so we suggest syntax for it in the table below. However, the majority of cases will hopefully only use the first row in the table of proposed additions.
+- `<usize, bool>`
+- `<'a, &'a u32, 23.7_f64>`
+- `<usize,>` (trailing comma required)
+- `<>`
+- `<'a, '_, u32, <'b, 3_u32, &'b T>, ()>`
 
-| **Today's Rust**        | Declare                           | Fill            |
-|-------------------------|-----------------------------------|-----------------|
-| One type parameter      | `<T>`                             | `<i32>`         |
-| Two type parameters     | `<T, U>`                          | `<i32, usize>`  |
-| Two lifetime parameters | `<'a, 'b>`                        | `<'a, 'static>` |
-| Two const parameters    | `<const A: i32, const B: usize>`  | `<3, 5>`        |
+### Generic pack parameter
 
-| **Proposed additions**                                                                       | Declare                                                         | Fill                                                                                             |
-|----------------------------------------------------------------------------------------------|-----------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
-| One list of zero or more type parameters (MVP needs only this)                               | `<...Ts>`                                                       | `<i32, u32, usize>`                                                                              |
-| Two lists of zero or more type parameters                                                    | `<<...Ts>, <...Us>>`                                            | `<<i32, u32, &str>, <u32, usize>>`                                                               |
-| Two lists of zero or more lifetime parameters                                                | `<<...'as>, <...'bs>>`                                          | `<<'static, '_>, <'a, 'b>>`                                                                      |
-| Two lists of zero or more const parameters                                                   | `<<...const As: i32>, <const Bs: u32>>`                         | `<<-1, 0, 1>, <42>>`                                                                             |
-| One list of groupings of one lifetime parameter, one type parameter, and one const parameter | `<...<'as, Ts: 'as, const Ns: Ts>>`                             | `<<'static, i32, -4>, <'_, bool, false>>`                                                        |
-| Putting it all together                                                                      | `<'a, ...'bs, ...Ts, ...<'a, T>, <...<Ts, Us>>, <...<Ts, Us>>>` | `<'static, '_, 'b, u32, i64, <'static, u32>, <'static, i32>>, <<u32, usize>, <i32, isize>>, <>>` |
+In today's Rust, generic parameters come in several forms.
 
-### `static for` over types, lifetimes, and consts
+| Declare                          | Fill            | Result                     |
+|----------------------------------|-----------------|----------------------------|
+| `<T>`                            | `<i32>`         | `T = i32`                  |
+| `<T, U>`                         | `<i32, u32>`    | `T = i32`, `U = u32`       |
+| `<'a, 'b>`                       | `<'_, 'static>` | `'a = '_`, `'b = 'static`  |
+| `<const A: u32, const B: isize>` | `<3, 5>`        | `A = 3_u32`, `B = 5_isize` |
 
-`static for` can also be used to iterate over a block with a list of types, lifetimes, or consts.
+A **generic pack parameter** is a generic parameter that is bound to a generic pack of a particular form. `...` is used to declare such parameters.
 
-The examples in this section show how to use this feature with concrete types, but it is really meant for use with variadic generic types. Examples of that will come later.
+| Declare                                | Fill                                                          | Result                                                                                             |
+|----------------------------------------|---------------------------------------------------------------|----------------------------------------------------------------------------------------------------|
+| `<...Ts>`                              | `<usize, u32, bool>`                                          | `Ts = <usize, u32, bool>`                                                                          |
+| `<<...Ts>, <...Us>>`                   | `<<i32, isize>, <u32, usize, bool>>`                          | `Ts = <i32, isize>`, `Us = <u32, usize, bool>`                                                     |
+| `<<...'as>, <...'bs>>`                 | `<<'static, '_>, <'a>>`                                       | `'as = <'static, '_>`, `'bs = <'a>`                                                                |
+| `<T, <...const As: T>, <const Bs: T>>` | `<i32, <-1, 0, 1>, <42>>`                                     | `T = i32`, `As = <-1_i32, 0_i32, 1_i32>`, `Bs = <42_i32>`                                          |
+| `<...<'as, Ts: 'as, const Ns: Ts>>`    | `<<'static, i32, -4>, <'_, bool, false>>`                     | `'as = <'static, '_>`, `Ts = <i32, bool>`, `Ns = <-4_i32, false>`                                  |
+| `<'a, ...'bs, ...Ts, ...<'cs, Us>>`    | `<'static, '_, 'b, u32, i64, <'static, u32>, <'static, i32>>` | `'a = 'static`, `'bs = <'_, 'b>`, `Ts = <u32, i64>`, `'cs = <'static, 'static>`, `Us = <u32, i32>` |
+| `<...<...<'as, Ts: 'as>>>`             | `<<<'static, isize>, <'a, & 'a u32>>, <<'b, &'b mut usize>>>` | `'as = <<'static, 'a>, <'b>>`, `Ts = <<isize, &'a u32>, <&'b mut usize>>`                          |
+| `<F, ...Ts, U>`                        | `<isize, u32, f64, usize>`                                    | `F = isize`, `Ts = <u32, f64>`, `U = usize`                                                        |
+| `<F, ...Ts>`                           | `<u32>`                                                       | `F = u32`, `Ts = <>`                                                                               |
 
-TODO: bikeshed.
-
-```rust
-let t: (usize, i32) = static for type T in <usize, i32> {
-    T::default();
-};
-
-assert_eq!(t, (0, 0))
-```
-
-```rust
-static for 'x in <'static, 'a> {
-    // Not much interesting you can do with only a lifetime...
-    // But these will get more useful in later examples.
-    let _: &'x i32 = &42;
-};
-```
-
-```rust
-let t: (usize, usize, usize) = static for const N: usize in <3, 17, 21> {
-    // Like with lifetimes, this only gets useful once you use it with generics.
-    N + 1
-};
-
-assert_eq!(t, (4, 18, 22));
-```
-
-```rust
-let t: (usize, i32, bool) = static for <type T, const N: T> in <<usize, 3>, <i32, -10>, <bool, true>> {
-    N
-};
-
-assert_eq!(t, (3, -10, true));
-```
-
-`static for` can also work with both values and types/lifetimes/consts at the same time:
-
-```rust
-let t: ((i32, bool), (u32, usize), (i32, u8)) = static for val, type T in (1, 2, 1), <bool, usize, u8> {
-    (val, T::default())
-};
-
-assert_eq!(t, ((1, false), (2, 0), (1, 0)));
-```
+Sequences of generic pack parameters that are structurally ambiguous are forbidden. For example, `<...Ts, ...Us>` is not allowed, because it would then be unclear at the fill site what belongs in `Ts` vs `Us`. Use nesting instead: `<<...Ts>, <...Us>>`.
 
 ### Type-level `...`
 
-Type-level `...` unpacks a comma-separated list of types, lifetimes, or consts at the type level.
+Type-level `...` unpacks a generic argument pack.
 
 This feature is meant for use with variadic generics, so the concrete examples below will be underwhelming.
 
@@ -345,9 +316,79 @@ let t: (...<i32, u32>,) = (2, 3);
 let t: (...<i32, u32>, isize) = (2, 3, -4);
 ```
 
+### `static for` over types, lifetimes, and consts
+
+`static for` can also be used to iterate over the members of a generic argument pack.
+
+TODO: bikeshed.
+
+```rust
+// `type` keyord is required for disambiguation
+let t: (usize, i32) = static for type T in <usize, i32> {
+    T::default();
+};
+
+assert_eq!(t, (0, 0))
+```
+
+```rust
+static for 'x in <'static, 'a> {
+    // Not much interesting you can do with only a lifetime...
+    // But these will get more useful in later examples.
+    let _: &'x i32 = &42;
+};
+```
+
+```rust
+// TODO: should type annotation on `const N` be required?
+let t: (usize, usize, usize) = static for const N: usize in <3, 17, 21> {
+    N + 1
+};
+
+assert_eq!(t, (4, 18, 22));
+```
+
+```rust
+let t: (usize, i32, bool) = static for type T, const N: T in <usize, i32, bool>, <3, -10, true> {
+    N + T::default()
+};
+
+assert_eq!(t, (3, -10, true));
+```
+
+```rust
+// TODO: "There should be one-- and preferably only one --obvious way to do it."
+let t: (usize, i32, bool) = static for <type T, const N: T> in <<usize, 3>, <i32, -10>, <bool, true>> {
+    N + T::default()
+};
+
+assert_eq!(t, (3, -10, true));
+```
+
+```rust
+// TODO: should `type` keyword be required?
+let t: ((usize, i32), (bool,)) = static for <...type Ts>, <...const Ns: Ts> in <<usize, i32>, <bool,>>, <<3, -10,>, <true,>> {
+    static for type T, const N: T in Ts, Ns {
+        N + T::default()
+    }
+};
+
+assert_eq!(t, ((3, -10), (true,)));
+```
+
+`static for` can also work with both unpackable values and generic argument packs at the same time:
+
+```rust
+let t: ((i32, bool), (u32, usize), (i32, u8)) = static for val, type T in (1, 2, 1), <bool, usize, u8> {
+    (val, T::default())
+};
+
+assert_eq!(t, ((1, false), (2, 0), (1, 0)));
+```
+
 ### Type-level for-in
 
-Type-level for-in maps a comma-separated list of types, lifetimes, or consts to a new list of the same length, at the type level.
+Type-level for-in maps a generic argument pack to a new pack of the same length.
 
 Once again, for use with variadic generics, so the concrete examples below will be underwhelming.
 
@@ -371,8 +412,8 @@ let t: (...for<<T, const N: usize> in <<bool, 3>, <char, 1>>> [T; N],) = ([false
 
 ```rust
 //     ╭─ `(usize, (u32, i32, usize), (bool, char))`, but written in an overly verbose fashion.
-//    ╭┴───────────────────────────────────────────────────────────────────╮
-let t: (usize, ...for<...Ts in <<u32, i32, usize>, <bool, char>>> (...Ts,)) = (4, (1, 7, 4), (true, 'c'));
+//    ╭┴─────────────────────────────────────────────────────────────────────╮
+let t: (usize, ...for<<...Ts> in <<u32, i32, usize>, <bool, char>>> (...Ts,)) = (4, (1, 7, 4), (true, 'c'));
 ```
 
 ### `..` inferred type parameter lists
@@ -462,7 +503,7 @@ fn test_option_wrap() {
 ```rust
 /// Move the first element of the tuple to the end.
 fn swing_around<H, ...Ts>((head, ...tail): (H, ...Ts)) -> (...Ts, H) {
-  //  ╭─ Use value-level splat operator to construct the tuple.
+  //  ╭─ Use value-level unpack operator to construct the tuple.
   // ╭┴──────╮
     ( ...tail , head)
 }
@@ -568,9 +609,12 @@ fn test_collect_consts() {
 }
 ```
 
+Variadics add no new post-monomprphization errors, all possible instantiations must be valid.
+
 ```rust
-// ERROR ambiguous variadic generics (where does one set end and the other start?)
-// fn doesnt_work<...Ts, ...Us>() {}
+fn foo<...Ts>(tup: (...Ts,)) {
+    // drop(...tup); // ERROR: `drop` is a function of arity 1, but `tup` could have any arity
+}
 ```
 
 We now have enough to implement several traits for tuples of any length.
@@ -611,7 +655,7 @@ As is our tradition, we start with a contrived concrete example before introduci
 //                    │  elements are passed individually.
 //                    │  TODO: allow `tuple @ ..` as alternative syntax?
 //                    │
-//                    │           ╭─ No need to splat or parenthesize.
+//                    │           ╭─ No need to unpack or parenthesize.
 //                    │           │  TODO: bikeshed above statement
 //                   ╭┴────────╮ ╭┴─────────╮
 fn collect_contrived( ... tuple : <u32, i32> ) -> (u32, i32) {
@@ -672,12 +716,27 @@ fn collect_at_least_one<H, ...Ts>(head: H, ...tail: Ts) -> (H, ...Ts) {
 }
 
 #[test]
-fn collect_at_least_one() {
-    // assert_eq!(id_at_least_one(), ()); ERROR expected at least 2 parameters, found 1
+fn test_collect_at_least_one() {
+    // assert_eq!(collect_at_least_one(), ()); ERROR expected at least 2 parameters, found 1
     assert_eq!(collect_at_least_one(3), (3,));
     assert_eq!(collect_at_least_one(42, "hello world"), (42, "hello world"));
     assert_eq!(collect_at_least_one(false, false, 0), (false, false, 0));
     assert_eq!(collect_at_least_one::<[u8; 9], &str>(b"t u r b o", "f i s h"), (b"t u r b o", "f i s h"));
+}
+```
+
+Multiple variadic arguments can follow one another, but turbofish is then required for disambiguation.
+TODO: bikeshed above statement.
+
+```rust
+fn double_vararg<<...Ts>, <...Us>>collect_twice(...fst: Ts, ...lst: Us) -> ((...Ts,), (...Us,)) {
+    (fst, lst)
+}
+
+#[test]
+fn test_double_vararg() {
+    assert_eq!(double_vararg::<<i32, u32>, <usize,>>(1, 2, 3), ((1, 2), (3,)));
+    assert_eq!(double_vararg::<<i32,>, <u32, usize>>(1, 2, 3), ((1,), (2, 3)));
 }
 ```
 
@@ -741,7 +800,7 @@ impl<...Futs> Join<...Futs,> {
 }
 
 impl<...Futs: Future> Future for Join<...Futs> {
-    type Output = (...for<F in Futs > F::Output,);
+    type Output = (...for<F in Futs> F::Output,);
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut all_done = true;
@@ -810,7 +869,7 @@ impl<...<Ts: PartialEq<Us>, Us>> PartialEq<(...for<U in Us> U,)> for (...for<T i
 
 ```rust
 /// Pair of tuples → tuple of pairs
-pub fn zip<...<Ts, Us>>(left: (...for<T in Ts> T,), right: (...for<U in Us> U,)) -> (...for<<T, U> in <Ts, Us>> (T, U),) {
+pub fn zip<...<Ts, Us>>(left: (...for<T in Ts> T,), right: (...for<U in Us> U,)) -> (...for<T, U in Ts, Us> (T, U),) {
     static for l, r in left, right {
         (l, r)
     }
@@ -819,7 +878,7 @@ pub fn zip<...<Ts, Us>>(left: (...for<T in Ts> T,), right: (...for<U in Us> U,))
 
 ```rust
 /// Tuple of pairs → pair of tuples
-pub fn unzip<...<Ts, Us>>(zipped: (...for<<T, U> in <Ts, Us>> (T, U),) -> ((...for<T in Ts> T,), (...for<U in Us> U,)) {
+pub fn unzip<...<Ts, Us>>(zipped: (...for<T, U in Ts, Us> (T, U),)) -> ((...for<T in Ts> T,), (...for<U in Us> U,)) {
     // This one is a bit mind-bending.
     // TODO: could it be made more intuitive?
     static for ...elems in ...zipped {
@@ -908,7 +967,7 @@ It would be desirable to allow constraining the length of a generic parameter pa
 /// Tranform MxN tuple into NxM
 //                                   ╭─ Each `Ts` in `Tss` has `N` elements
 //                                  ╭┴╮
-fn pivot<const N: usize, ...<...Tss; N >>(tuples: (...for<Ts in Tss> (...Ts,),)) {
+fn pivot<const N: usize, ...<...Tss; N >>(tuples: (...for<<...Ts> in Tss> (...Ts,),)) {
     static for ...t in ...tuples {
         t
     }
@@ -921,11 +980,11 @@ It would be nice to have a way to express "get the `N`th value of this tuple, if
 
 ### TODO: Variadic variant lists with enums
 
-With APIs like `futures::select`, you want to pass in N values, and get back a value corresponding to one of the `N` arguments. [Yoshua Wuyt's blog posts](https://blog.yoshuawuyts.com/more-enum-types/) explore this in detail. To support this case, one might want enum types whose variats correspnd to variadic generic parameters. But perhaps the additional complexity is not necessary; for example, in `futures::select` we could instead ask the caller to wrap the result type of their futures in an enm they define.
+With APIs like `futures::select`, you want to pass in N values, and get back a value corresponding to one of the `N` arguments. [Yoshua Wuyts's blog posts](https://blog.yoshuawuyts.com/more-enum-types/) explore this in detail. To support this case, one might want enum types whose variats correspnd to variadic generic parameters. But perhaps the additional complexity is not necessary; for example, in `futures::select` we could instead ask the caller to wrap the result type of their futures in an enm they define.
 
 ## TODO
 
 - [ ] Add additional advanced examples
-- [ ] Come up with nomenclature ("comma-separated list of things" is not exactly Shakespearean eloquence)
 - [ ] Resolve inline bikeshed TODOs
 - [ ] Lifetime elision
+- [ ] impl Trait
