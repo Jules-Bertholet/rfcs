@@ -2,15 +2,17 @@
 
 ## Use-cases we want to support
 
-- `iter::zip`
-- `futures::join`
-- `Fn` traits
-- Implementing traits for tuples
-- `frunk`
-- `unsized_fn_params`
+- [x] [`iter::zip`](https://doc.rust-lang.org/std/iter/fn.zip.html)
+- [x] [`futures::join`](https://docs.rs/futures/latest/futures/future/fn.join.html)
+- [x] [`Fn` traits](https://doc.rust-lang.org/std/ops/trait.FnOnce.html) ([GitHub issue](https://github.com/rust-lang/rust/issues/41058))
+- [x] Implementing traits for tuples ([stdlib](https://doc.rust-lang.org/std/primitive.tuple.html#trait-implementations), [Sourcegraph](https://sourcegraph.com/search?q=context:global+lang:Rust+impl%5B+%3C%5D+.*+for+%5C%28&patternType=regexp&sm=0&groupBy=repo))
+- [x] `#![feature(unsized_fn_params)]`
   - But don't penalize `Sized` ergonomics to accomplish it.
-- `futures::select`?
-- Gateway drug to compile-time reflection/macro-free `derive`?
+- [ ] [`frunk::HList`](https://docs.rs/frunk/latest/frunk/hlist/index.html)
+- [ ] [`futures::select`](https://docs.rs/futures/latest/futures/future/fn.select.html)
+- [ ] Other [`frunk`](https://docs.rs/frunk/latest/frunk/) use-cases?
+- [ ] Compile-time reflection/macro-free `derive`?
+- [ ] Suggestions welcome
 
 ## Design principles
 
@@ -30,8 +32,10 @@
 ## Prior art
 
 - [C](https://en.cppreference.com/w/c/variadic)
+- [Circle](https://github.com/seanbaxter/circle/blob/master/new-circle/README.md#pack-traits)
 - [C++](https://en.cppreference.com/w/cpp/language/parameter_pack)
 - [D](https://dlang.org/spec/function.html#variadic)
+- [Java](https://docs.oracle.com/javase/8/docs/technotes/guides/language/varargs.html)
 - [JavaScript](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Spread_syntax)
 - [PHP](https://www.php.net/manual/en/functions.arguments.php#functions.variable-arg-list)
 - [Ruby](https://docs.ruby-lang.org/en/3.2/syntax/calling_methods_rdoc.html#label-Array+to+Arguments+Conversion)
@@ -39,11 +43,16 @@
 - [Swift](https://github.com/apple/swift-evolution/blob/main/proposals/0393-parameter-packs.md)
 - [Zig](https://ziglang.org/documentation/master/#comptime)
 
+## Other links
+
+- [Analysing variadics, and how to add them to Rust - PoignardAzur](https://poignardazur.github.io/2021/01/30/variadic-generics/)
+- [More enum types - Yoshua Wuyts](https://blog.yoshuawuyts.com/more-enum-types/)
+
 ## Variadics and values
 
 ### `...` operator
 
-`...` ("splat") is a prefix operator that unpacks a parenthesized list of values. It operates on tuples, tuple structs, and arrays. (For tuple structs, all the fields must be visible at the location where `...` is invoked. Also, if the struct is marked `non_exhaustive`, then splatting only works within the defining crate.)
+`...` ("splat") is a prefix operator that unpacks a parenthesized list of values. It operates on tuples, tuple structs, arrays, and references to them. (For tuple structs, all the fields must be visible at the location where `...` is invoked. Also, if the struct is marked `non_exhaustive`, then splatting only works within the defining crate.)
 
 TODO: should it be called "splat", "spread", or something else?
 
@@ -60,11 +69,20 @@ let h: Foo: = Foo(...[true, false]);
 let i: [i32, 3] = [1, ...(2, 3)];
 ```
 
+Splatting a reference results in references.
+
+```rust
+let j: (i32, &usize, &bool) = (3, ...&(4, false));
+let k: (i32, &mut usize, &mut bool) = (3, ...&mut (4, false));
+```
+
 ### `...` pattern
 
-`...` can also be used in patterns. There, it serves as an alternative to `ident @ ..`.
+`...` can also be used in patterns.
 
 #### Arrays
+
+For arrays, `...` patterns serve as an alternative to `ident @ ..`.
 
 ```rust
 let a: [i32, 3] = [1, 2, 3];
@@ -78,7 +96,7 @@ let _: &mut [i32; 2] = head;
 
 #### Tuples
 
-`...ident` patterns also work with tuples.
+`...` patterns also work with tuples.
 
 ```rust
 let t: (i32, f64, &str) = (1, 2.0, "hi");
@@ -102,6 +120,7 @@ let _: (&_, &_) = head;
 ```
 
 TODO: extend `ident @ ..` patterns to support this?
+TODO: allow using `...` patterns with slices as well?
 
 #### Tuple structs
 
@@ -123,10 +142,9 @@ let _: (&_, &_) = head;
 
 ### `static for` loop
 
-`static for` loops allow iterating over the elements of a splattable value (tuple, tuple struct, array).
-The loop is unrolled at compile-time.
+`static for` loops allow iterating over the elements of a splattable value (tuple, tuple struct, array, references to these). The loop is unrolled at compile-time.
 
-TODO: bikeshed.
+TODO: bikeshed syntax.
 
 ```rust
 let mut v: Vec<Box<dyn Debug>> = Vec::new();
@@ -168,9 +186,7 @@ let _: (Option<u32>, Option<bool>) = static for i in (42, false) {
 };
 ```
 
-TODO: should `static for` over an array evaluate to an array instead?
-
-`static for` does not support `break`, but you can `continue` with a value.
+You can `continue` with a value.
 
 ```rust
 let _: (Option<u32>, Option<bool>) = static for i in (42, false) {
@@ -182,7 +198,7 @@ let _: (Option<u32>, Option<bool>) = static for i in (42, false) {
 };
 ```
 
-`continue` with no value specified is equivalent to `continue ()`.
+`continue;` with no value specified is equivalent to `continue ();`.
 
 ```rust
 static for i in (42, false) {
@@ -194,11 +210,51 @@ static for i in (42, false) {
 }
 ```
 
+`static for` can also contain a `break` statement; this changes the return type of the loop to `()`. Such a loop only supports bare `continue;`, with no value provided.
+
+```rust
+static for i in (42, false) {
+    if we_are_done() {
+        break;
+    }
+
+    some_operation(i);
+}
+```
+
+You can `static for` over multiple splattable values at once, as long as they are the same length.
+
+```rust
+let t: ((i8, u8), (i16, u16), (i32, u32)) = static for i, u in (-1, -2, -3), (1, 2, 3) {
+    (i, u)
+};
+
+assert_eq!(t, ((-1, 1), (-2, 2), (-3, 3)));
+```
+
+`...` patterns can also be used for working with multiple values at once. When used after `for`, the resulting binding has tuple type.
+
+```rust
+let t: ((i8, u8), (i16, u16), (i32, u32)) = static for ...tup in (-1, -2, -3), (1, 2, 3) {
+    tup
+};
+
+assert_eq!(t, ((-1, 1), (-2, 2), (-3, 3)));
+```
+
+```rust
+let t: ((i8, u8), (i16, u16), (i32, u32)) = static for ...tup in ...((-1, -2, -3), (1, 2, 3)) {
+    tup
+};
+
+assert_eq!(t, ((-1, 1), (-2, 2), (-3, 3)));
+```
+
 ## Variadics and types
 
 ### Generic parameter syntax
 
-Today, generic parameter lists are necessarily flat. At the value level, we can use arrays, tuples, and slices to give structure to the parameters we pass in. But at the type level, this is not possible. More complex uses of variadics may need structured parameter lists, so we suggest syntax for it in the table below. However, the vast majority of cases will hopefully only use the first row in the table of proposed additions.
+Today, generic parameter lists are necessarily flat. At the value level, we can use arrays and tuples, to give structure to the parameters we pass in. But at the type level, this is not possible. More complex uses of variadics may need structured parameter lists, so we suggest syntax for it in the table below. However, the majority of cases will hopefully only use the first row in the table of proposed additions.
 
 | **Today's Rust**        | Declare                           | Fill            |
 |-------------------------|-----------------------------------|-----------------|
@@ -257,11 +313,21 @@ let t: (usize, i32, bool) = static for <type T, const N: T> in <<usize, 3>, <i32
 assert_eq!(t, (3, -10, true));
 ```
 
+`static for` can also work with both values and types/lifetimes/consts at the same time:
+
+```rust
+let t: ((i32, bool), (u32, usize), (i32, u8)) = static for val, type T in (1, 2, 1), <bool, usize, u8> {
+    (val, T::default())
+};
+
+assert_eq!(t, ((1, false), (2, 0), (1, 0)));
+```
+
 ### Type-level `...`
 
 Type-level `...` unpacks a comma-separated list of types, lifetimes, or consts at the type level.
 
-This feature is meant for use with variadic generics, so the concrete examples will be underwheling.
+This feature is meant for use with variadic generics, so the concrete examples below will be underwheling.
 
 ```rust
 //     ╭─ `(i32, u32)`, but written in an overly verbose fashion.
@@ -280,7 +346,7 @@ let t: (...<i32, u32>, isize) = (2, 3, -4);
 
 Type-level for-in maps a comma-separated list of types, lifetimes, or consts to a new list of the same length, at the type level.
 
-Once again, for use with variadic generics, so the concrete examples will be underwheling.
+Once again, for use with variadic generics, so the concrete examples below will be underwheling.
 
 ```rust
 //     ╭─ `(Option<i32>, Option<u32>)`, but written in an overly verbose fashion.
@@ -304,6 +370,20 @@ let t: (...for<<T, const N: usize> in <<bool, 3>, <char, 1>>> [T; N],) = ([false
 //     ╭─ `(usize, (u32, i32, usize), (bool, char))`, but written in an overly verbose fashion.
 //    ╭┴───────────────────────────────────────────────────────────────────╮
 let t: (usize, ...for<...Ts in <<u32, i32, usize>, <bool, char>>> (...Ts,)) = (4, (1, 7, 4), (true, 'c'));
+```
+
+### `..` inferred type parameter lists
+
+In today's Rust, you can mark type parameters as inferred with `_`.
+
+```rust
+let a: Option<_> = Some(3_u32);
+```
+
+With this proposal, you can use `..` to infer a list of type parameters.
+
+```rust
+let tup: (usize, ..) = (3, false, "hello");
 ```
 
 ### Functions with variadic generic parameters
@@ -409,6 +489,8 @@ fn test_add_one_on() {
 }
 ```
 
+You can put trait bounds on variadic generic parameters.
+
 ```rust
 /// Return a tuple with the specified element types, generating each element value by calling `Default::default()`.
 //          ╭─ Every type in `Ts` must meet the `: Default` bound.
@@ -440,6 +522,8 @@ fn test_is_last_3() {
     assert_eq!(is_last_3(("yeah", "yeah", 3)), ("yeah", "yeah", true));
 }
 ```
+
+Where clauses are also supported, via for-in.
 
 ```rust
 /// Returns `true` iff 3 is equal to every element of the given tuple.
@@ -480,30 +564,89 @@ fn test_collect_consts() {
 }
 ```
 
-### `...` patterns in function parameter lists
+```rust
+// ERROR ambiguous variadic generics (where does one set end and the other start?)
+// fn doesnt_work<...Ts, ...Us>() {}
+```
 
-Funv
+We now have enough to implement several traits for tuples of any length.
 
 ```rust
+impl<...Ts: fmt::Debug> fmt::Debug for (...Ts,) {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        let mut list = f.debug_list();
 
+        static for elem in self {
+            f.entry(elem);
+        }
+        
+        list.finish()
+    }
+}
+```
+
+```rust
+impl<...Ts: Default> Default for (...Ts,) {
+    fn default() -> Self {
+        static for type T in Ts {
+            T::default()
+        }
+    }
+}
+```
+
+### `...` patterns in function parameter lists
+
+`...` patterns can also be used in function parameter lists.
+
+As is our tradition, we start with a contrived concrete example before introducing generics.
+
+```rust
+//                    ╭─ This binding has tuple type.
+//                    │  However, in terms of calling convention,
+//                    │  elements are passed individually.
+//                    │  TODO: allow `tuple @ ..` as alternative syntax?
+//                    │
+//                    │           ╭─ No need to splat or parenthesize.
+//                    │           │  TODO: bikeshed above statement
+//                   ╭┴────────╮ ╭┴─────────╮
+fn collect_contrived( ... tuple : <u32, i32> ) -> (u32, i32) {
+    tuple
+}
+
+// The above and below functions are exactly equivalent, in signature, semantics, and calling convention.
+
+fn collect_contrived(a: u32, b: i32) -> (u32, i32) {
+    (a, b)
+}
+```
+
+When using a `...` binding with unsized argument types via `unsized_fn_params`, there are additional restrictions.
+
+```rust
+#![feature(unsized_fn_params)]
+
+fn do_stuff_with_unsized_params(...tuple: <[u32], dyn Debug>) {
+    // `tuple` is still a tuple, sort of.
+    // But: you aren't allowed to take its address, or pass it to a function by value.
+    // The only thing you can do is index into its fields;
+    // either directly, via pattern match, or with `static for`.
+    // These restrictions won't be lifted even if `([u32], dyn Debug)` gets a defined layout,
+    // but they may be with `#![feature(unsized_locals)]`.
+
+    dbg!(&tuple.0[0]);
+    dbg!(&tuple.1);
+}
+```
+
+### Varargs
+
+Combining function parameter `...` and variadic generics gives us varargs.
+
+```rust
 /// Takes a variadic set of type arguments,
 /// returns those arguments collected into a tuple.
-//
-//                 ╭─ Declare variadic function parameter of zero or more values.
-//                 │  `vs` has tuple type. However, terms of calling convention,
-//                 │  the tuple is passed "destructured", as if each argument was separate.
-//                 │  If the callee is to use the tuple as a tuple, the callee
-//                 │  must reconstruct the tuple on its stack first.
-//                 │  (If the callee just needs to access individual fields, this reconstruction
-//                 │  is not performed, ensuring that simple variadics are a zero-cost abstraction.)
-//                 │
-//                 │
-//                 │
-//                 │  TODO: allow `vs @ ..` as alternative?
-//                 │
-//                ╭┴─────────╮ 
-fn collect<...Ts>( ...vs : Ts ) -> (...Ts,) {
-    // Return the tuple `vs`.
+fn collect<...Ts>(...vs: Ts) -> (...Ts,) {
     vs
 }
 
@@ -520,229 +663,97 @@ fn test_collect() {
 ```rust
 
 /// Does the same thing as `id`, but you have to pass in at least one value.
-//
-//                                                            ╭─ Type-level tuple
-//                                                            │  splat/flatten operator.
-//                                                           ╭┴──╮
-fn id_at_least_one<H, Ts @ ..>(head: H, tail @ ..: Ts) -> (H, ... Ts) {
-    //      ╭─ Use value-level splat operator to construct a tuple.
-    //      │  This prefix operator works on tuples,
-    //      │  and tuple structs whose fields are all visible.
-    //    ╭─┴─────╮
-    (head, ...tail )
+fn collect_at_least_one<H, ...Ts>(head: H, ...tail: Ts) -> (H, ...Ts) {
+    (head, ...tail)
 }
 
 #[test]
-fn test_id_at_least_one() {
+fn collect_at_least_one() {
     // assert_eq!(id_at_least_one(), ()); ERROR expected at least 2 parameters, found 1
-    assert_eq!(id_at_least_one(3), (3,));
-    assert_eq!(id_at_least_one(42, "hello world"), (42, "hello world"));
-    assert_eq!(id_at_least_one(false, false, 0), (false, false, 0));
-    assert_eq!(id_at_least_one::<[u8; 9], &str>(b"t u r b o", "f i s h"), (b"t u r b o", "f i s h"));
+    assert_eq!(collect_at_least_one(3), (3,));
+    assert_eq!(collect_at_least_one(42, "hello world"), (42, "hello world"));
+    assert_eq!(collect_at_least_one(false, false, 0), (false, false, 0));
+    assert_eq!(collect_at_least_one::<[u8; 9], &str>(b"t u r b o", "f i s h"), (b"t u r b o", "f i s h"));
 }
+```
 
-/// Returns a tuple wrapping all its arguments in `Some`.
-//
-//                                      ╭─ Map each type `T` in the tuple to a corresponding `Option<T>`.
-//                                      │  This type-level for-in operator evaluates to a tuple type.
-//                                      │  TODO: bikeshed syntax.
-//                                     ╭┴─────────────────────╮
-fn option_wrap<Ts @ ..>(ts @ ..: Ts) -> for<T in Ts> Option<T> {
-    // `static for` loops over tuples and tuple structs
-    // are expressions that evaluate to a tuple.
-    //
-    // Variadic `for` does not support `break`, but you can `continue` with a value.
-    //
-    // TODO: bikeshed syntax.
-    let wrapped: for<T in Ts> Option<T> = static for t in ts {
-        Some(t)
-    };
+### Variadics with ADTs
 
-    return wrapped;
-}
+```rust
+struct Tup<...Ts>(i32, ...Ts);
 
-#[test]
-fn test_option_wrap() {
-    assert_eq!(option_wrap(), ());
-    assert_eq!(option_wrap(3), (Some(3),));
-    assert_eq!(option_wrap(42, "hello world"), (Some(42), Some("hello world")));
-    assert_eq!(id_at_least_one(false, false, 0), (Some(false), Some(false), Some(0)));
-    assert_eq!(option_wrap::<[u8; 9], &str>(b"t u r b o", "f i s h"), (Some(b"t u r b o"), Some("f i s h")));
-}
-
-fn swing_around<H, Ts @ ..>(head: H, tail @ ..: Ts) -> (...Ts, H) {
-    (...tail, head)
-}
-
-#[test]
-fn test_swing_around() {
-    // assert_eq!((), swing_around()); ERROR expected at least 2 parameters, found 1
-    assert_eq!(swing_around(3), (3,));
-    assert_eq!(swing_around(42, "hello world"), ("hello world", 42));
-    assert_eq!(swing_around(false, false, 0), (0, false, false));
-    assert_eq!(swing_around::<[u8; 9], &str>(b"t u r b o", "f i s h"), ("f i s h", b"t u r b o"));
-}
-
-fn add_one_on<Ts @ ..>(ts @ ..: Ts) -> (...Ts, u32) {
-    (...ts, 17)
-}
-
-#[test]
-fn test_add_one_on() {
-    assert_eq!(add_one_on(), (17,),);
-    assert_eq!(add_one_on(3), (3, 17));
-    assert_eq!(add_one_on(42, "hello world"), (42, "hello world", 17));
-    assert_eq!(add_one_on(false, false, 0), (false, false, 0, 17));
-    assert_eq!(add_one_on::<[u8; 9], &str>(b"t u r b o", "f i s h"), (b"t u r b o", "f i s h", 17));
-}
-
-
-fn bounds<Ts @ ..>() -> Ts
-where
-    // TODO: bikeshed syntax.
-    for<T in Ts> T: Default
-{
-    // Like `static for` from earlier, but over a set of types instead of values.
-    // TODO: bikeshed syntax.
-    static for type T in Ts {
-        T::default()
-    }
-}
-
-#[test]
-fn test_bounds() {
-    assert_eq!(bounds::<>(), ());
-    assert_eq!(bounds::<u32>(), (0,));
-    assert_eq!(bounds::<u32, bool>(), (0, false));
-}
-
-/// Yes, variadic parameters can come in front of non-variadic ones.
-fn is_last_3<Ts @ .., Last: PartialEq<i32>>(tuple @ ..: Ts, last: Last) -> (...Ts, bool) {
-    (...tuple, last == 3)
-}
-
-#[test]
-fn test_is_last_3() {
-    assert_eq!(is_last_3("yeah", "yeah", 3), ("yeah", "yeah", true));
-}
-
-// ERROR ambiguous variadic generics (where does one set end and the other start.?)
-// fn doesnt_work<Ts @ .., Us @ ..>() {}
-
-// # Destructuring tuples
-
-fn add_one_on_2<H, Ts @ ..>(head: H, tail: (...Ts,)) -> (...Ts, H) {
-    // `@` binding pattern with `..` on a tuple produces a variadic binding,
-    // that can be used like a variadic function parameter.
-    let (tail @ ..) = tail;
-
-    (...tail, head)
-}
-
-fn add_one_on_3<H, Ts @ ..>(head: H, tail: (...Ts,)) -> (...Ts, H) {
-    // can also splat tuples and tuple structs directly
-    (...tail, head)
-}
-
-// # ADTs and traits
-
-// ## Tuple structs
-// a lot of this syntax applies to plain old tuples too
-
-struct Tup<Ts @ ..>(i32, ...Ts);
-
-impl<Ts @ ..> Tup<..Ts> {
-    fn new(i: i32, ts @ ..: Ts) {
+impl<...Ts> Tup<...Ts> {
+    fn new(i: i32, ...ts: Ts) {
         Self(i, ...ts)
     }
 
-    fn destructure(&self) {
-        let Tup(ref head, ref tail @ ..) = self;
-        assert!(*head > 3);
-        for t in tail {
-            println!("blah");
-        }
-    }
-}
-
-impl<Ts @ ..> Tup<i32, ...Ts> {
-    fn debug(&self) {
+    fn foo(&self) {
         dbg!(self.0);
         // dbg!(self.1); ERROR: that field might not exist
     }
 }
+```
 
+```rust
 // `iter::Zip`
 
-pub struct Zip<Is @ ..> {
-    is: (...Is,),
-}
+pub struct Zip<...Is>(...Is,)
 
-impl<Is @ ..> Zip<...Is,> {
-    fn new(iters @ ..: Is) {
-        Self {
-            is: (...iters,)
-        }
+impl<...Is> Zip<...Is> {
+    fn new(...iters: Is) {
+        Self(...iters)
     }
 }
 
-impl<Is @ ..> Iterator for Zip<...Is,>
-where
-    Is: Iterator,
-{
-    // Short form of `(...for<I in Is> I::Item,)`
-    type Item = (...Is::Item,);
+impl<...Is: Iterator> Iterator for Zip<...Is> {
+    type Item = (...for<I in Is> I::Item,);
 
-    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let next: Self::Item = for i in ...self.is { i.next()? };
+        let next: Self::Item = static for i in self {
+            i.next()?
+        };
+
         Some(next)
     }
 }
+```
 
+```rust
 // `futures::join`
 
 use  futures_util::future::{MaybeDone, maybe_done};
 
 #[pin_project::project]
-pub struct Join<Futs @ ..: Future> {
-    #[pin]
-    futs: (...MaybeDone<Futs>,),
-}
+pub struct Join<...Futs: Future>(#[pin] ...for<F in Futs> MaybeDone<F>);
 
-impl<Futs @ ..> Join<...Futs,> {
-    fn new(futures @ ..: Futs) {
-        Self {
-            futs: for future in future {
-                maybe_done(future)
-            }
-        }
+impl<...Futs> Join<...Futs,> {
+    fn new(...futures: Futs) {
+        let wrapped_futs = static for future in futures {
+            maybe_done(future)
+        };
+
+        Self(...wrapped_futs)
     }
 }
 
-impl<Futs @ ..: Future> Future for Join<...Futs,> {
-    type Output = (...Futs::Output,);
+impl<...Futs: Future> Future for Join<...Futs> {
+    type Output = (...for<F in Futs > F::Output,);
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut all_done = true;
 
-        // TODO: the ergonomics around pin projection need work.
+        // TODO: what is the best API for pin projection?
 
-        let futs = self.futures.project();
+        // Long, annoying type specified for example purposes.
+        // In reality, you would infer it with `(..)`.
+        let futs: (...for<F in Futs> Pin<&mut F>,) = self.project();
 
-        //                   ╭─ "inferred variadic params," variadic version of `_`.
-        //                   │  TODO: should trailing comma be required?
-        //                  ╭┴─╮
-        let futs_mut: &mut ( .. ,) = unsafe { self.futures.get_unchecked_mut() };
-
-        for fut in futs_mut {
-            let fut = unsafe { Pin::new_unchecked(&mut fut) };
+        static for fut in futs {
             all_done &= fut.poll(cx).is_ready();
         }
 
         if all_done {
-            let ready = for fut in futs_mut {
-                let fut = unsafe { Pin::new_unchecked(&mut fut) };
+            let ready = static for fut in futs {
                 fut.take_output().unwrap()
             };
 
@@ -752,12 +763,15 @@ impl<Futs @ ..: Future> Future for Join<...Futs,> {
         }
     }
 }
+```
 
+```rust
 // `FnOnce`
 
-trait FnOnce<Args @ ..> {
+trait FnOnce<...Args> {
     type Output;
-    fn call_once(self, args @ ..: Args) -> Self::Output;;
+
+    fn call_once(self, ...args: Args) -> Self::Output;
 }
 
 struct Foo;
@@ -770,70 +784,53 @@ impl FnOnce<u32, i32, i32> for Foo {
         a + ((b + c) as u32)
     }
 }
+```
 
-// # Multiple sets of variadic parameters
-//
-// This is where things start getting tricky.
-// TODO: do we need all of this?
-// Could we decide not to support these cases—
-// or will that lead to API composability issues down the road?
+### Advanced examples
 
-/// Takes a variadic set of mutable references to tuples,
-/// returns those arguments collected into a tuple.
-///
-///                 ╭─ means "I accept some number of lifetimes,
-///                 │  then the same number of `T`s, then the same number of `U`s"
-///                 │  TODO: needs bikeshed.
-///               ╭─┴───────────╮
-fn unzip_mut_refs< ('as, Ts, Us) @ ..>(
-         // very ugly, but there is a shorthand: `&'as mut (Ts, Us)`
-    a @ ..: for<'a, T, U in 'as, Ts, Us> &'a mut (T, U)
-  // Shorthand here is `((...&'as mut Ts,), (...&'as mut Us,))`
-) -> ((...for<'a, T in 'as, Ts> &'a mut T,),  (...for<'a, U in 'as, Us> &'a mut U,)) {
-    let left = for &mut (t, _) in a {
-        &mut t
-    };
+```rust
+// Implement non-symmetric `PartialEq` for tuples
 
-    let right = for &mut (_, u) in a {
-        &mut u
-    };
-
-    (left, right)
-}
-
-#[test]
-fn test_unzip_mut_refs() {
-    let mut a = (3_u32, false);
-    let mut b = (2.0_f64, "hi");
-    let mut c = ('c', -4_i32);
-
-    // Note the order in which the generics are specified.
-    // However, if we were turbofishing lifetime parameters too,
-    // those would all be at the front.
-    let (left, right): ((&mut u32, &mut f64, &mut char), (&mut bool, &mut &'static str, &mut i32)) =
-        unzip_mut_refs::<u32, bool, f64, &'static str, char, i32>(&mut a, &mut b, &mut c);
-}
-
-trait Foo<T @ ..> {
-    fn join(&self, args @ ..: T);
-}
-
-impl<'f, F: Debug, ('as, Ts: Debug, Us: Debug) @ ..> Foo<
-    &'f F,
-    ...for<'a, T in 'as, Ts> &'a T
-> for Tup<...Us,> {
-    ///                        ╭─ new syntax: < > brackets enclose a list
-    ///                        │  of types, turns it into a variadic type set
-    ///                        │  TODO: ugly
-    ///                      ╭─┴─────────────────────────────────────╮
-    fn join(&self, args @ ..: <&'f F, ...for<'a, T in 'as, Ts> &'a T> ) {
-        let Tup(ref us @ ..) = self;
-        for left, right in args, us {
-            dbg!(left);
-            dbg!(right);
+impl<...<Ts: PartialEq<Us>, Us>> PartialEq<(...for<U in Us> U,)> for (...for<T in Ts> T,) {
+    fn eq(&self, other: &(...for<U in Us> U,)) {
+        static for l, r in self, other {
+            if l != r {
+                return false;
+            }
         }
+
+        true
     }
 }
-
-fn nested
 ```
+
+```rust
+/// Pair of tuples → tuple of pairs
+pub fn zip<...<Ts, Us>>(left: (...for<T in Ts> T,), right: (...for<U in Us> U,)) -> (...for<<T, U> in <Ts, Us>> (T, U),) {
+    static for l, r in left, right {
+        (l, r)
+    }
+}
+```
+
+```rust
+/// Tuple of pairs → pair of tuples
+pub fn unzip<...<Ts, Us>>(zipped: (...for<<T, U> in <Ts, Us>> (T, U),) -> ((...for<T in Ts> T,), (...for<U in Us> U,)) {
+    // This one is a bit mind-bending.
+    // TODO: could it be made more intuitive?
+    static for ...elems in ...zipped {
+        elems
+    }
+}
+```
+
+## TODO
+
+- [ ] Add additional advanced examples
+- [ ] Discuss what this proposal doesn't handle, sketch out possible solutions
+  - [ ] Iteration in non-default order (ex: reversing elements of a tuple)
+  - [ ] Enums with a variadic list of variants (for example, `futures::select` return value)
+  - [ ] Generalized MxN → NxM transformation
+  - [ ] Tuple random access (get Nth element if it exists)
+- [ ] Come up with nomenclature ("comma-separated list of things" is not exactly Shakespearean eloquence)
+- [ ] Resolve inline bikeshed TODOs
