@@ -35,6 +35,8 @@
 - [C](https://en.cppreference.com/w/c/variadic)
 - [Circle](https://github.com/seanbaxter/circle/blob/master/new-circle/README.md#pack-traits)
 - [C++](https://en.cppreference.com/w/cpp/language/parameter_pack)
+  - [Reversing a tuple](https://stackoverflow.com/questions/17178075/how-do-i-reverse-the-order-of-element-types-in-a-tuple-type)
+- [C#](https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/params)
 - [D](https://dlang.org/spec/function.html#variadic)
 - [Java](https://docs.oracle.com/javase/8/docs/technotes/guides/language/varargs.html)
 - [JavaScript](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Spread_syntax)
@@ -56,13 +58,14 @@
 `...` ("unpack") is a prefix operator that unpacks a parenthesized list of values. It operates on tuples, tuple structs, arrays, and references to them. (For tuple structs, all the fields must be visible at the location where `...` is invoked. Also, if the struct is marked `non_exhaustive`, then unpacking only works within the defining crate.)
 
 TODO: should it be called "unpack", "splat", "spread", or something else?
+TODO: should it be postfix instead?
 
 ```rust
 let a: (i32, u32) = (3, 4);
 let b: (i32, u32, usize) = (...a, 1);
 let c: (usize, i32, u32) = (1, ...a);
 struct Foo(bool, bool);
-let d: (bool, bool) = (...Foo(true, false),); // TODO: should trailing comma be required?
+let d: (bool, bool) = (...Foo(true, false));
 let e: Foo = Foo(...d);
 let f: [i32, 3] = [1, ...[2, 3]];
 let g: (i32, i32, i32) = (1, ...(2, 3));
@@ -305,9 +308,8 @@ This feature is meant for use with variadic generics, so the concrete examples b
 
 ```rust
 //     ╭─ `(i32, u32)`, but written in an overly verbose fashion.
-//     │  TODO: should trailing comma be required?
-//    ╭┴───────────────╮
-let t: (...<i32, u32>,) = (2, 3);
+//    ╭┴──────────────╮
+let t: (...<i32, u32>) = (2, 3);
 ```
 
 ```rust
@@ -394,26 +396,26 @@ Once again, for use with variadic generics, so the concrete examples below will 
 
 ```rust
 //     ╭─ `(Option<i32>, Option<u32>)`, but written in an overly verbose fashion.
-//    ╭┴───────────────────────────────────╮
-let t: (...for<T in <i32, u32>> Option<T>,) == (Some(2), Some(3));
+//    ╭┴──────────────────────────────────╮
+let t: (...for<T in <i32, u32>> Option<T>) == (Some(2), Some(3));
 ```
 
 ```rust
 //     ╭─ `([bool; 3], [bool; 12])`, but written in an overly verbose fashion.
-//    ╭┴─────────────────────────────────────────────╮
-let t: (...for<const N: usize in <8, 12>> [bool; N],) = ([false; 3], [false; 0]);
+//    ╭┴────────────────────────────────────────────╮
+let t: (...for<const N: usize in <8, 12>> [bool; N]) = ([false; 3], [false; 0]);
 ```
 
 ```rust
 //     ╭─ `([bool; 3], [char; 1])`, but written in an overly verbose fashion.
-//    ╭┴──────────────────────────────────────────────────────────────╮
-let t: (...for<<T, const N: usize> in <<bool, 3>, <char, 1>>> [T; N],) = ([false; 3], ['c']);
+//    ╭┴─────────────────────────────────────────────────────────────╮
+let t: (...for<<T, const N: usize> in <<bool, 3>, <char, 1>>> [T; N]) = ([false; 3], ['c']);
 ```
 
 ```rust
 //     ╭─ `(usize, (u32, i32, usize), (bool, char))`, but written in an overly verbose fashion.
-//    ╭┴─────────────────────────────────────────────────────────────────────╮
-let t: (usize, ...for<<...Ts> in <<u32, i32, usize>, <bool, char>>> (...Ts,)) = (4, (1, 7, 4), (true, 'c'));
+//    ╭┴────────────────────────────────────────────────────────────────────╮
+let t: (usize, ...for<<...Ts> in <<u32, i32, usize>, <bool, char>>> (...Ts)) = (4, (1, 7, 4), (true, 'c'));
 ```
 
 ### `..` inferred type parameter lists
@@ -444,9 +446,9 @@ This section will just be examples, showing how the concepts we've introduced so
 //     │
 //     │             ╭─ A tuple of all the types in `Ts`.
 //     │             │
-//     │             ├─────────────╮
-//    ╭┴────╮       ╭┴───────╮    ╭┴───────╮  
-fn id< ...Ts >( vs : (...Ts,) ) -> (...Ts,) {
+//     │             ├────────────╮
+//    ╭┴────╮       ╭┴──────╮    ╭┴──────╮  
+fn id< ...Ts >( vs : (...Ts) ) -> (...Ts) {
     vs
 }
 
@@ -468,7 +470,7 @@ fn id_at_least_one<H, ...Ts>(tuple: (H, ...Ts)) -> (H, ...Ts) {
 
 #[test]
 fn test_id_at_least_one() {
-    // assert_eq!(id_at_least_one((),), ()); ERROR expected at tuple of length at least one
+    // assert_eq!(id_at_least_one(()), ()); ERROR expected at tuple of length at least one
     assert_eq!(id_at_least_one(3), (3,));
     assert_eq!(id_at_least_one((42, "hello world")), (42, "hello world"));
     assert_eq!(id_at_least_one((false, false, 0)), (false, false, 0));
@@ -479,10 +481,10 @@ fn test_id_at_least_one() {
 ```rust
 /// Wraps all the elements of the input tuple in `Some`.
 //
-//                                           ╭─ Map each type `T` in the tuple to a corresponding `Option<T>`.
-//                                           │  Type-level for-in with generics.
-//                                          ╭┴─────────────────────╮
-fn option_wrap<...Ts>(vs : (...Ts,)) -> (... for<T in Ts> Option<T> ,) {
+//                                          ╭─ Map each type `T` in the tuple to a corresponding `Option<T>`.
+//                                          │  Type-level for-in with generics.
+//                                         ╭┴─────────────────────╮
+fn option_wrap<...Ts>(vs : (...Ts)) -> (... for<T in Ts> Option<T> ) {
     let wrapped: (...for<T in Ts> Option<T>,) = static for v in vs {
         Some(v)
     };
@@ -520,13 +522,13 @@ fn test_swing_around() {
 
 ```rust
 /// Push `17` onto the end of the tuple.
-fn add_one_on<...Ts>(vs : (...Ts,)) -> (...Ts, u32) {
+fn add_one_on<...Ts>(vs : (...Ts)) -> (...Ts, u32) {
     (...vs, 17)
 }
 
 #[test]
 fn test_add_one_on() {
-    assert_eq!(add_one_on(()), (17,),);
+    assert_eq!(add_one_on(()), (17,));
     assert_eq!(add_one_on((3,)), (3, 17));
     assert_eq!(add_one_on((42, "hello world")), (42, "hello world", 17));
     assert_eq!(add_one_on((false, false, 0)), (false, false, 0, 17));
@@ -540,7 +542,7 @@ You can put trait bounds on variadic generic parameters.
 /// Return a tuple with the specified element types, generating each element value by calling `Default::default()`.
 //          ╭─ Every type in `Ts` must meet the `: Default` bound.
 //         ╭┴─────────────╮
-fn default< ...Ts: Default >() -> (...Ts,) {
+fn default< ...Ts: Default >() -> (...Ts) {
     // `static for` with variadic generic type.
     static for type T in Ts {
         T::default()
@@ -572,7 +574,7 @@ Where clauses are also supported, via for-in.
 
 ```rust
 /// Returns `true` iff 3 is equal to every element of the given tuple.
-fn all_3<...Ts>(vs : (...Ts,)) -> bool
+fn all_3<...Ts>(vs : (...Ts)) -> bool
 where
     /// Every type `T` in `Ts` meets the specified bound.
     for<T in Ts> i32: PartialEq<T>,
@@ -596,7 +598,7 @@ fn test_all_3() {
 
 ```rust
 /// Collect the provided const generic params into a `for` loop.
-fn collect_consts<...const Ns: usize>() -> (...for<const N: usize in Ns> usize,) {
+fn collect_consts<...const Ns: usize>() -> (...for<const N: usize in Ns> usize) {
     static for const N: usize in Ns {
         N
     }
@@ -612,7 +614,7 @@ fn test_collect_consts() {
 Variadics add no new post-monomprphization errors, all possible instantiations must be valid.
 
 ```rust
-fn foo<...Ts>(tup: (...Ts,)) {
+fn foo<...Ts>(tup: (...Ts)) {
     // drop(...tup); // ERROR: `drop` is a function of arity 1, but `tup` could have any arity
 }
 ```
@@ -620,7 +622,7 @@ fn foo<...Ts>(tup: (...Ts,)) {
 We now have enough to implement several traits for tuples of any length.
 
 ```rust
-impl<...Ts: fmt::Debug> fmt::Debug for (...Ts,) {
+impl<...Ts: fmt::Debug> fmt::Debug for (...Ts) {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         let mut list = f.debug_list();
 
@@ -634,7 +636,7 @@ impl<...Ts: fmt::Debug> fmt::Debug for (...Ts,) {
 ```
 
 ```rust
-impl<...Ts: Default> Default for (...Ts,) {
+impl<...Ts: Default> Default for (...Ts) {
     fn default() -> Self {
         static for type T in Ts {
             T::default()
@@ -656,7 +658,6 @@ As is our tradition, we start with a contrived concrete example before introduci
 //                    │  TODO: allow `tuple @ ..` as alternative syntax?
 //                    │
 //                    │           ╭─ No need to unpack or parenthesize.
-//                    │           │  TODO: bikeshed above statement
 //                   ╭┴────────╮ ╭┴─────────╮
 fn collect_contrived( ... tuple : <u32, i32> ) -> (u32, i32) {
     tuple
@@ -694,7 +695,7 @@ Combining function parameter `...` and variadic generics gives us varargs.
 ```rust
 /// Takes a variadic set of type arguments,
 /// returns those arguments collected into a tuple.
-fn collect<...Ts>(...vs: Ts) -> (...Ts,) {
+fn collect<...Ts>(...vs: Ts) -> (...Ts) {
     vs
 }
 
@@ -702,7 +703,7 @@ fn collect<...Ts>(...vs: Ts) -> (...Ts,) {
 fn test_collect() {
     assert_eq!(collect(), ());
     assert_eq!(collect(3), (3,));
-    assert_eq!(collect(42, "hello world"), (42, "hello world"),);
+    assert_eq!(collect(42, "hello world"), (42, "hello world"));
     assert_eq!(collect(false, false, 0), (false, false, 0));
     assert_eq!(collect::<[u8; 9], &str>(b"t u r b o", "f i s h"), (b"t u r b o", "f i s h"));
 }
@@ -729,7 +730,7 @@ Multiple variadic arguments can follow one another, but turbofish is then requir
 TODO: bikeshed above statement.
 
 ```rust
-fn double_vararg<<...Ts>, <...Us>>collect_twice(...fst: Ts, ...lst: Us) -> ((...Ts,), (...Us,)) {
+fn double_vararg<<...Ts>, <...Us>>collect_twice(...fst: Ts, ...lst: Us) -> ((...Ts), (...Us)) {
     (fst, lst)
 }
 
@@ -760,7 +761,7 @@ impl<...Ts> Tup<...Ts> {
 ```rust
 // `iter::Zip`
 
-pub struct Zip<...Is>(...Is,)
+pub struct Zip<...Is>(...Is)
 
 impl<...Is> Zip<...Is> {
     fn new(...iters: Is) {
@@ -769,7 +770,7 @@ impl<...Is> Zip<...Is> {
 }
 
 impl<...Is: Iterator> Iterator for Zip<...Is> {
-    type Item = (...for<I in Is> I::Item,);
+    type Item = (...for<I in Is> I::Item);
 
     fn next(&mut self) -> Option<Self::Item> {
         let next: Self::Item = static for i in self {
@@ -789,7 +790,7 @@ use  futures_util::future::{MaybeDone, maybe_done};
 #[pin_project::project]
 pub struct Join<...Futs: Future>(#[pin] ...for<F in Futs> MaybeDone<F>);
 
-impl<...Futs> Join<...Futs,> {
+impl<...Futs> Join<...Futs> {
     fn new(...futures: Futs) {
         let wrapped_futs = static for future in futures {
             maybe_done(future)
@@ -800,7 +801,7 @@ impl<...Futs> Join<...Futs,> {
 }
 
 impl<...Futs: Future> Future for Join<...Futs> {
-    type Output = (...for<F in Futs> F::Output,);
+    type Output = (...for<F in Futs> F::Output);
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut all_done = true;
@@ -809,7 +810,7 @@ impl<...Futs: Future> Future for Join<...Futs> {
 
         // Long, annoying type specified for example purposes.
         // In reality, you would infer it with `(..)`.
-        let futs: (...for<F in Futs> Pin<&mut F>,) = self.project();
+        let futs: (...for<F in Futs> Pin<&mut F>) = self.project();
 
         static for fut in futs {
             all_done &= fut.poll(cx).is_ready();
@@ -854,8 +855,8 @@ impl FnOnce<u32, i32, i32> for Foo {
 ```rust
 // Implement non-symmetric `PartialEq` for tuples
 
-impl<...<Ts: PartialEq<Us>, Us>> PartialEq<(...for<U in Us> U,)> for (...for<T in Ts> T,) {
-    fn eq(&self, other: &(...for<U in Us> U,)) {
+impl<...<Ts: PartialEq<Us>, Us>> PartialEq<(...for<U in Us> U)> for (...for<T in Ts> T) {
+    fn eq(&self, other: &(...for<U in Us> U)) {
         static for l, r in self, other {
             if l != r {
                 return false;
@@ -869,7 +870,7 @@ impl<...<Ts: PartialEq<Us>, Us>> PartialEq<(...for<U in Us> U,)> for (...for<T i
 
 ```rust
 /// Pair of tuples → tuple of pairs
-pub fn zip<...<Ts, Us>>(left: (...for<T in Ts> T,), right: (...for<U in Us> U,)) -> (...for<T, U in Ts, Us> (T, U),) {
+pub fn zip<...<Ts, Us>>(left: (...for<T in Ts> T), right: (...for<U in Us> U)) -> (...for<T, U in Ts, Us> (T, U)) {
     static for l, r in left, right {
         (l, r)
     }
@@ -878,7 +879,7 @@ pub fn zip<...<Ts, Us>>(left: (...for<T in Ts> T,), right: (...for<U in Us> U,))
 
 ```rust
 /// Tuple of pairs → pair of tuples
-pub fn unzip<...<Ts, Us>>(zipped: (...for<T, U in Ts, Us> (T, U),)) -> ((...for<T in Ts> T,), (...for<U in Us> U,)) {
+pub fn unzip<...<Ts, Us>>(zipped: (...for<T, U in Ts, Us> (T, U))) -> ((...for<T in Ts> T), (...for<U in Us> U)) {
     // This one is a bit mind-bending.
     // TODO: could it be made more intuitive?
     static for ...elems in ...zipped {
@@ -893,7 +894,7 @@ pub fn unzip<...<Ts, Us>>(zipped: (...for<T, U in Ts, Us> (T, U),)) -> ((...for<
 
 ```rust
 /// Debug-print every element of the tuple.
-fn recursive_dbg<...Ts: Debug>(ts: (...Ts,)) {
+fn recursive_dbg<...Ts: Debug>(ts: (...Ts)) {
     match ts {
         () => (),
         (head, ...tail) => {
@@ -908,7 +909,7 @@ Recursion also allows iterating in a different order.
 
 ```rust
 /// Debug-print every element of the tuple, in reverse order.
-fn recursive_dbg<...Ts: Debug>(ts: (...Ts,)) {
+fn recursive_dbg<...Ts: Debug>(ts: (...Ts)) {
     match ts {
         () => (),
         (...head, tail) => {
@@ -923,7 +924,7 @@ However, how do we express this recursion at the type level?
 
 ```rust
 /// Reverse the order of the elements in the tuple.
-fn reverse_tuple<...Ts: Debug>(ts: (...Ts,)) -> _ /* what do we put here? */ {
+fn reverse_tuple<...Ts: Debug>(ts: (...Ts)) -> _ /* what do we put here? */ {
     match ts {
         () => (),
         (head, ...tail) => {
@@ -949,7 +950,7 @@ What might type-level `match` look like?
 >;
 
 /// Reverse the order of the elements in the tuple.
-fn reverse_tuple<...Ts: Debug>(ts: (...Ts,)) -> (...Reverse<...Ts>) {
+fn reverse_tuple<...Ts: Debug>(ts: (...Ts)) -> (...Reverse<...Ts>) {
     match ts {
         () => (),
         (head, ...tail) => {
@@ -967,7 +968,7 @@ It would be desirable to allow constraining the length of a generic parameter pa
 /// Tranform MxN tuple into NxM
 //                                   ╭─ Each `Ts` in `Tss` has `N` elements
 //                                  ╭┴╮
-fn pivot<const N: usize, ...<...Tss; N >>(tuples: (...for<<...Ts> in Tss> (...Ts,),)) {
+fn pivot<const N: usize, ...<...Tss; N >>(tuples: (...for<<...Ts> in Tss> (...Ts))) {
     static for ...t in ...tuples {
         t
     }
@@ -978,13 +979,17 @@ fn pivot<const N: usize, ...<...Tss; N >>(tuples: (...for<<...Ts> in Tss> (...Ts
 
 It would be nice to have a way to express "get the `N`th value of this tuple, if it exists", where `N` is a const generic parameter. One would also need a type-level equivalent for generic parameter packs.
 
+(People have expressed this desire in feedback to the author, but I would like to see concrete use-cases.)
+
 ### TODO: Variadic variant lists with enums
 
-With APIs like `futures::select`, you want to pass in N values, and get back a value corresponding to one of the `N` arguments. [Yoshua Wuyts's blog posts](https://blog.yoshuawuyts.com/more-enum-types/) explore this in detail. To support this case, one might want enum types whose variats correspnd to variadic generic parameters. But perhaps the additional complexity is not necessary; for example, in `futures::select` we could instead ask the caller to wrap the result type of their futures in an enm they define.
+With APIs like `futures::select`, you want to pass in N values, and get back a value corresponding to one of the `N` arguments. [Yoshua Wuyts's blog posts](https://blog.yoshuawuyts.com/more-enum-types/) explore this in detail. To support this case, one might want enum types whose variats correspnd to variadic generic parameters. But perhaps the additional complexity is not necessary; for example, in `futures::select` we could instead ask the caller to wrap the result type of their futures in an enum they define.
 
 ## TODO
 
 - [ ] Add additional advanced examples
 - [ ] Resolve inline bikeshed TODOs
-- [ ] Lifetime elision
-- [ ] impl Trait
+- [ ] Add desgin for:
+  - [ ] Higher-ranked and elided lifetimes
+  - [ ] `impl Trait`
+  - [ ] GATs
