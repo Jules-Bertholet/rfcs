@@ -18,6 +18,7 @@
 ## Design principles
 
 - Re-use existing language infrastructure and concepts when possible (tuples, pattern matching).
+  - "Perfection is achieved, not when there is nothing left to add, but when there is nothing left to take away."
   - But also, support library types!
 - Don't support only pre-determined special cases, support all the cases.
   - Provide composable building blocks.
@@ -28,7 +29,8 @@
 - Try to keep simple cases simple.
 - "Explicit is better than implicit."
   - No implicit iteration! Ugly loops are preferable to beautiful bugs.
-  - It should be hopefully be clear whether an identifier refers to one thing or N things, wherever it is used.
+  - It should be clear whether an identifier refers to one thing or N things, wherever it is used.
+- "There should be one-- and preferably only one --obvious way to do it."
 
 ## Prior art
 
@@ -261,72 +263,90 @@ assert_eq!(t, ((-1, 1), (-2, 2), (-3, 3)));
 
 ## Variadics and types
 
-### Generic argument packs
+### Type-level `...`
 
-A **generic argument** is a type, lifetime, or constant. A **generic argument pack** is a comma-separated list of zero or more generic arguments, including nested packs. Lifetimes in a pack must be listed first.
+Type-level `...` unpacks a tuple at the type level.
 
-Examples of generic argument packs:
+```rust
+type Tup = (u32, bool);
+struct Foo<T, U>(T, U);
 
-- `<usize, bool>`
-- `<'a, &'a u32, 23.7_f64>`
-- `<usize,>` (trailing comma required)
-- `<>`
-- `<'a, '_, u32, <'b, 3_u32, &'b T>, ()>`
+//     ╭─ Equivalent to `Foo<u32, bool>`
+//    ╭┴──────────╮
+let _: Foo<...Tup> = Foo(1, false);
+```
 
-### Generic pack parameter
+It also works with arrays:
+
+```rust
+//     ╭─ Equivalent to `(i32, i32, i32)`
+//    ╭┴────────────╮
+let a: (...[i32; 3]) = (2, -5, 7);
+```
+
+However, unlike value-level `...`, it does not work with tuple structs.
+
+### Tuple generic parameters
 
 In today's Rust, generic parameters come in several forms.
 
-| Declare                          | Fill            | Result                     |
-|----------------------------------|-----------------|----------------------------|
-| `<T>`                            | `<i32>`         | `T = i32`                  |
-| `<T, U>`                         | `<i32, u32>`    | `T = i32`, `U = u32`       |
-| `<'a, 'b>`                       | `<'_, 'static>` | `'a = '_`, `'b = 'static`  |
-| `<const A: u32, const B: isize>` | `<3, 5>`        | `A = 3_u32`, `B = 5_isize` |
+| Description                             | Declare                          | Fill            | Result                                  |
+| --------------------------------------- | -------------------------------- | --------------- | --------------------------------------- |
+| One type implementing the `Debug` trait | `<T: Debug>`                     | `<i32>`         | `type T = i32;`                         |
+| Two lifetimes                           | `<'a, 'b>`                       | `<'_, 'static>` | `'a = '_; 'b = 'static;`                |
+| Two consts                              | `<const A: u32, const B: isize>` | `<3, 5>`        | `const A: u32 = 3; const B: isize = 5;` |
 
-A **generic pack parameter** is a generic parameter that is bound to a generic pack of a particular form. `...` is used to declare such parameters.
+This proposal adds *tuple generic parameters*, which match tuples of a particular form.
 
-| Declare                                | Fill                                                          | Result                                                                                             |
-|----------------------------------------|---------------------------------------------------------------|----------------------------------------------------------------------------------------------------|
-| `<...Ts>`                              | `<usize, u32, bool>`                                          | `Ts = <usize, u32, bool>`                                                                          |
-| `<<...Ts>, <...Us>>`                   | `<<i32, isize>, <u32, usize, bool>>`                          | `Ts = <i32, isize>`, `Us = <u32, usize, bool>`                                                     |
-| `<<...'as>, <...'bs>>`                 | `<<'static, '_>, <'a>>`                                       | `'as = <'static, '_>`, `'bs = <'a>`                                                                |
-| `<T, <...const As: T>, <const Bs: T>>` | `<i32, <-1, 0, 1>, <42>>`                                     | `T = i32`, `As = <-1_i32, 0_i32, 1_i32>`, `Bs = <42_i32>`                                          |
-| `<...<'as, Ts: 'as, const Ns: Ts>>`    | `<<'static, i32, -4>, <'_, bool, false>>`                     | `'as = <'static, '_>`, `Ts = <i32, bool>`, `Ns = <-4_i32, false>`                                  |
-| `<'a, ...'bs, ...Ts, ...<'cs, Us>>`    | `<'static, '_, 'b, u32, i64, <'static, u32>, <'static, i32>>` | `'a = 'static`, `'bs = <'_, 'b>`, `Ts = <u32, i64>`, `'cs = <'static, 'static>`, `Us = <u32, i32>` |
-| `<...<...<'as, Ts: 'as>>>`             | `<<<'static, isize>, <'a, & 'a u32>>, <<'b, &'b mut usize>>>` | `'as = <<'static, 'a>, <'b>>`, `Ts = <<isize, &'a u32>, <&'b mut usize>>`                          |
-| `<F, ...Ts, U>`                        | `<isize, u32, f64, usize>`                                    | `F = isize`, `Ts = <u32, f64>`, `U = usize`                                                        |
-| `<F, ...Ts>`                           | `<u32>`                                                       | `F = u32`, `Ts = <>`                                                                               |
+| Description                                                                           | Declare                                                  | Fill                                 | Result                                                                                      |
+| ------------------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------- |
+| One tuple type, specified unpacked                                                    | `<...Ts>`                                                | `<usize, u32, bool>`                 | `type Ts = (usize, u32, bool);`                                                             |
+| Two tuple types                                                                       | `<(...Ts), (...Us)>`                                     | `<(i32, isize), (u32,)>`             | `type Ts = (i32, isize); type Us = (u32,);`                                                 |
+| ~~Two tuple types, specified unpacked~~ (ambiguous, not permitted)                    | ~~`<...Ts, ...Us>`~~                                     | --                                   | --                                                                                          |
+| One tuple type, specified unpacked, all of whose elements implement `Debug`           | `<...Ts: Debug>`                                         | `<usize, u32, bool>`                 | `type Ts = (usize, u32, bool);`                                                             |
+| Two tuple types, all of whose elements implement `Debug`                              | `<(...Ts: Debug), (...Us: Debug)>`                       | `<(i32, isize), (u32,)>`             | `type Ts = (i32, isize); type Us = (u32,);`                                                 |
+| Two tuple types that implement `Debug`                                                | `<(...Ts): Debug, (...Us): Debug>`                       | `<(i32, isize), (u32,)>`             | `type Ts = (i32, isize); type Us = (u32,);`                                                 |
+| Two tuple types of arity at least 1                                                   | `<(T0, ...Ts), (U0, ...Us)>`                             | `<(i32, isize), (u32,)>`             | `type T0 = i32; type Ts = (isize,); type U0 = u32; type Us = ()`                            |
+| Two tuple types of the same arity (TODO: bikeshed semicolon syntax)                   | `<(...Ts; N), (...Us; N)>`                               | `<(i32, isize), (u32, usize)>`       | `type Ts = (i32, isize); type Us = (u32, usize); const N: usize = 2;`                       |
+| Two tuple types of the same arity >= 1                                                | `<(T0, ...Ts; N), (U0, ...Us; N)>`                       | `<(i32, isize), (u32, usize)>`       | `type T0 = i32; type Ts = (isize,); type U0 = u32; type Us = (usize,); const N: usize = 1;` |
+| A tuple of tuples, all of the same length, specified unpacked                         | `<...(...Ts; N)>`                                        | `<(i32, i8), (u32, u8), (u64, i64)>` | `type Ts = ((i32, i8), (u32, u8), (u64, i64));`                                             |
+| Two tuple types of the same arity, specified unpacked                                 | `<...Ts; N, ...Us; N>`                                   | `<i32, isize, u32, usize>`           | `type Ts = (i32, isize); type Us = (u32, usize); const N: usize = 2;`                       |
+| One tuple type, and a const generic of that type, specified unpacked (TODO: bikeshed) | `<...Ts, ...const Ns: ...Ts>`                            | `<usize, bool, 1, true>`             | `type Ts = (usize, bool); const Ns: Ts = (1, true);`                                        |
+| Two tuple types, and one const generic of each type                                   | `<(...Ts), (...Us), const Ns: Ts, const Ms: Us>`         | `<(usize,), (), (3,), ()>`           | `type Ts = (usize,); type Us = (); const Ns: Ts = (3,); const Ms: Us = ();`                 |
+| One tuple of types, where each member outlives some lifetime, specified unpacked      | `<...'as, ...Ts: ...'as>`                                | `<'static, '_, u32, &'_ str>`        | `type Ts = (u32, &'_ str);`                                                                 |
+| Two tuples of types, where each member outlives some lifetime                         | `<<...'as>, <...'bs>, (...Ts: ...'as), (...Us: ...'bs)>` | `<<'static,>, <>, u32, &'_ str>`     | `type Ts = (u32, &'_ str); type Us = ();`                                                   |
 
-Sequences of generic pack parameters that are structurally ambiguous are forbidden. For example, `<...Ts, ...Us>` is not allowed, because it would then be unclear at the fill site what belongs in `Ts` vs `Us`. Use nesting instead: `<<...Ts>, <...Us>>`.
+### Lifetime tuples
 
-### Type-level `...`
+TODO: This concept needs bikeshed.
 
-Type-level `...` unpacks a generic argument pack.
+The "just use tuples for everything" model works well for types and consts, but how should a tuple of lifetimes behave?
 
-This feature is meant for use with variadic generics, so the concrete examples below will be underwhelming.
+In terms of syntax, parenthesized list `('a, 'b, ...)` is out, as `()` would be ambiguous in generic argument lists—is it an empty set of lifetimes, or is that set elided and it's actually a type? This proposal uses square brackets, but there are other possibilities, for example `'('a,  'b)` (looks Lispy).
 
-```rust
-//     ╭─ `(i32, u32)`, but written in an overly verbose fashion.
-//    ╭┴──────────────╮
-let t: (...<i32, u32>) = (2, 3);
-```
+As for semantics, it would be nice if a "lifetime pack", as we will call it for now, was itself a valid lifetime—just as tuples of consts and types are themselves valid consts and types. It's not clear what this lifetime should be, and maybe the symmetry isn't actually worthwhile, but for now we will say it is the union (`<'a, 'b>` = `'a + 'b`). (It could also be the interesction!)
 
-```rust
-//     ╭─ `(i32, u32, usize)`, but written in an overly verbose fashion.
-//    ╭┴─────────────────────╮
-let t: (...<i32, u32>, isize) = (2, 3, -4);
-```
+### Unsized types
+
+Variadic generics shpuld not be restricted by the layout limitations of tuples. Therefore, the rules around `Sized` need to be loosened. Specifically: a tuple type is valid whether or not any of its members are `Sized`. But, in addition to the restrictions that all unsized types have, it's not allowed to take the address of multiply-unsized tuples, nor is it allowed to pass them as function arguments (even with ``#![feature(unsized_fn_params)]`). They can be thought of as not implementing an unnameable`?Sized`-style trait.
+
+Without `#![feature(unsized_fn_params)]`, you can't produce a value of a mutiply-unsized tuple at all. With the feature gate, you can do so with tuple literal syntax and varargs (explained below). You can also index into their fields, destructure them with a pattern match, unpack them with `...`, or iterate over them with `static for`.
+
+A generic parameter like `(...Ts): ?Sized` allows `(...Ts)` to have an unsized last member only. `...Ts: ?Sized` or `(...Ts: ?Sized)` allows all members of `Ts` to be unsized.
+
+Some or all these restrictions mat be lifted if `#![feature(unsized_locals)]` is ever stabilized.
+
+### Maximum arity
+
+We use `usize` to store arity, so with this proposal it's impossible to have a tuple or tuple struct with more than `usize::MAX` members. Such code would be incredibly degenerate anyway, so I doubt this restriction will be a problem. But it is, in theory, a potential source of post-monomorphization errors.
 
 ### `static for` over types, lifetimes, and consts
 
-`static for` can also be used to iterate over the members of a generic argument pack.
-
+`static for` can also be used to iterate over the members of a tuple type or const, or a lifetime pack.
 TODO: bikeshed.
 
 ```rust
-// `type` keyord is required for disambiguation
-let t: (usize, i32) = static for type T in <usize, i32> {
+let t: (usize, i32) = static for type T in (usize, i32) {
     T::default();
 };
 
@@ -343,7 +363,7 @@ static for 'x in <'static, 'a> {
 
 ```rust
 // TODO: should type annotation on `const N` be required?
-let t: (usize, usize, usize) = static for const N: usize in <3, 17, 21> {
+let t: (usize, usize, usize) = static for const N: usize in (3, 17, 21) {
     N + 1
 };
 
@@ -351,7 +371,7 @@ assert_eq!(t, (4, 18, 22));
 ```
 
 ```rust
-let t: (usize, i32, bool) = static for type T, const N: T in <usize, i32, bool>, <3, -10, true> {
+let t: (usize, i32, bool) = static for type T, const N: T in (usize, i32, bool), (3, -10, true) {
     N + T::default()
 };
 
@@ -359,29 +379,7 @@ assert_eq!(t, (3, -10, true));
 ```
 
 ```rust
-// TODO: "There should be one-- and preferably only one --obvious way to do it."
-let t: (usize, i32, bool) = static for <type T, const N: T> in <<usize, 3>, <i32, -10>, <bool, true>> {
-    N + T::default()
-};
-
-assert_eq!(t, (3, -10, true));
-```
-
-```rust
-// TODO: should `type` keyword be required?
-let t: ((usize, i32), (bool,)) = static for <...type Ts>, <...const Ns: Ts> in <<usize, i32>, <bool,>>, <<3, -10,>, <true,>> {
-    static for type T, const N: T in Ts, Ns {
-        N + T::default()
-    }
-};
-
-assert_eq!(t, ((3, -10), (true,)));
-```
-
-`static for` can also work with both unpackable values and generic argument packs at the same time:
-
-```rust
-let t: ((i32, bool), (u32, usize), (i32, u8)) = static for val, type T in (1, 2, 1), <bool, usize, u8> {
+let t: ((i32, bool), (u32, usize), (i32, u8)) = static for val, type T in (1, 2, 1), (bool, usize, u8) {
     (val, T::default())
 };
 
@@ -390,32 +388,30 @@ assert_eq!(t, ((1, false), (2, 0), (1, 0)));
 
 ### Type-level for-in
 
-Type-level for-in maps a generic argument pack to a new pack of the same length.
-
-Once again, for use with variadic generics, so the concrete examples below will be underwhelming.
+Type-level for-in maps a list of type or const tuples, or lifetime packs, to a new such tuple/pack of the same length.
 
 ```rust
 //     ╭─ `(Option<i32>, Option<u32>)`, but written in an overly verbose fashion.
-//    ╭┴──────────────────────────────────╮
-let t: (...for<T in <i32, u32>> Option<T>) == (Some(2), Some(3));
+//    ╭┴─────────────────────────────╮
+let t: for<T in (i32, u32)> Option<T> == (Some(2), Some(3));
 ```
 
 ```rust
 //     ╭─ `([bool; 3], [bool; 12])`, but written in an overly verbose fashion.
-//    ╭┴────────────────────────────────────────────╮
-let t: (...for<const N: usize in <8, 12>> [bool; N]) = ([false; 3], [false; 0]);
+//    ╭┴───────────────────────────────────────╮
+let t: for<const N: usize in (8, 12)> [bool; N] = ([false; 3], [false; 0]);
 ```
 
 ```rust
 //     ╭─ `([bool; 3], [char; 1])`, but written in an overly verbose fashion.
-//    ╭┴─────────────────────────────────────────────────────────────╮
-let t: (...for<<T, const N: usize> in <<bool, 3>, <char, 1>>> [T; N]) = ([false; 3], ['c']);
+//    ╭┴────────────────────────────────────────────────────╮
+let t: for<T, const N: usize in (bool, char), (3, 1)> [T; N] = ([false; 3], ['c']);
 ```
 
 ```rust
 //     ╭─ `(usize, (u32, i32, usize), (bool, char))`, but written in an overly verbose fashion.
-//    ╭┴────────────────────────────────────────────────────────────────────╮
-let t: (usize, ...for<<...Ts> in <<u32, i32, usize>, <bool, char>>> (...Ts)) = (4, (1, 7, 4), (true, 'c'));
+//    ╭┴──────────────────────────────────────────────────────────╮
+let t: (usize, ...for<Ts in ((u32, i32, usize), (bool, char))> Ts) = (4, (1, 7, 4), (true, 'c'));
 ```
 
 ### `..` inferred type parameter lists
@@ -444,11 +440,11 @@ This section will just be examples, showing how the concepts we've introduced so
 //
 //     ╭─ Declare variadic generic parameter of zero or more types.
 //     │
-//     │             ╭─ A tuple of all the types in `Ts`.
-//     │             │
-//     │             ├────────────╮
-//    ╭┴────╮       ╭┴──────╮    ╭┴──────╮  
-fn id< ...Ts >( vs : (...Ts) ) -> (...Ts) {
+//     │           ╭─ A tuple of all the types in `Ts`.
+//     │           │
+//     │           ├───────╮
+//    ╭┴────╮     ╭┴─╮    ╭┴─╮  
+fn id< ...Ts >(vs: Ts ) -> Ts {
     vs
 }
 
@@ -481,10 +477,10 @@ fn test_id_at_least_one() {
 ```rust
 /// Wraps all the elements of the input tuple in `Some`.
 //
-//                                          ╭─ Map each type `T` in the tuple to a corresponding `Option<T>`.
-//                                          │  Type-level for-in with generics.
-//                                         ╭┴─────────────────────╮
-fn option_wrap<...Ts>(vs : (...Ts)) -> (... for<T in Ts> Option<T> ) {
+//                                ╭─ Map each type `T` in the tuple to a corresponding `Option<T>`.
+//                                │  Type-level for-in with generics.
+//                               ╭┴─────────────────────╮
+fn option_wrap<...Ts>(vs : Ts) -> for<T in Ts> Option<T> {
     let wrapped: (...for<T in Ts> Option<T>,) = static for v in vs {
         Some(v)
     };
@@ -522,7 +518,7 @@ fn test_swing_around() {
 
 ```rust
 /// Push `17` onto the end of the tuple.
-fn add_one_on<...Ts>(vs : (...Ts)) -> (...Ts, u32) {
+fn add_one_on<...Ts>(vs: Ts) -> (...Ts, u32) {
     (...vs, 17)
 }
 
@@ -542,7 +538,7 @@ You can put trait bounds on variadic generic parameters.
 /// Return a tuple with the specified element types, generating each element value by calling `Default::default()`.
 //          ╭─ Every type in `Ts` must meet the `: Default` bound.
 //         ╭┴─────────────╮
-fn default< ...Ts: Default >() -> (...Ts) {
+fn default< ...Ts: Default >() -> Ts {
     // `static for` with variadic generic type.
     static for type T in Ts {
         T::default()
@@ -574,7 +570,7 @@ Where clauses are also supported, via for-in.
 
 ```rust
 /// Returns `true` iff 3 is equal to every element of the given tuple.
-fn all_3<...Ts>(vs : (...Ts)) -> bool
+fn all_3<...Ts>(vs: Ts) -> bool
 where
     /// Every type `T` in `Ts` meets the specified bound.
     for<T in Ts> i32: PartialEq<T>,
@@ -611,10 +607,10 @@ fn test_collect_consts() {
 }
 ```
 
-Variadics add no new post-monomprphization errors, all possible instantiations must be valid.
+Variadics add no new post-monomprphization errors, all possible instantiations must be valid. (There is one exception to this, detailed in an earlier section: tuple and tuple struct arities can't overflow `usize::MAX`.)
 
 ```rust
-fn foo<...Ts>(tup: (...Ts)) {
+fn foo<...Ts>(tup: Ts) {
     // drop(...tup); // ERROR: `drop` is a function of arity 1, but `tup` could have any arity
 }
 ```
@@ -622,7 +618,7 @@ fn foo<...Ts>(tup: (...Ts)) {
 We now have enough to implement several traits for tuples of any length.
 
 ```rust
-impl<...Ts: fmt::Debug> fmt::Debug for (...Ts) {
+impl<...Ts: fmt::Debug> fmt::Debug for Ts {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         let mut list = f.debug_list();
 
@@ -636,7 +632,7 @@ impl<...Ts: fmt::Debug> fmt::Debug for (...Ts) {
 ```
 
 ```rust
-impl<...Ts: Default> Default for (...Ts) {
+impl<...Ts: Default> Default for Ts {
     fn default() -> Self {
         static for type T in Ts {
             T::default()
@@ -657,9 +653,8 @@ As is our tradition, we start with a contrived concrete example before introduci
 //                    │  elements are passed individually.
 //                    │  TODO: allow `tuple @ ..` as alternative syntax?
 //                    │
-//                    │           ╭─ No need to unpack or parenthesize.
-//                   ╭┴────────╮ ╭┴─────────╮
-fn collect_contrived( ... tuple : <u32, i32> ) -> (u32, i32) {
+//                   ╭┴────────╮ 
+fn collect_contrived( ... tuple : ... (u32, i32) ) -> (u32, i32) {
     tuple
 }
 
@@ -670,13 +665,13 @@ fn collect_contrived(a: u32, b: i32) -> (u32, i32) {
 }
 ```
 
-When using a `...` binding with unsized argument types via `unsized_fn_params`, there are additional restrictions.
+When using a `...` binding with unsized argument types via `unsized_fn_params`, there are additional restrictions, as explained earlier.
 
 ```rust
 #![feature(unsized_fn_params)]
 
-fn do_stuff_with_unsized_params(...tuple: <[u32], dyn Debug>) {
-    // `tuple` is still a tuple, sort of.
+fn do_stuff_with_unsized_params(...tuple: ...([u32], dyn Debug)) {
+    // `tuple` is still a tuple.
     // But: you aren't allowed to take its address, or pass it to a function by value.
     // The only thing you can do is index into its fields;
     // either directly, via pattern match, or with `static for`.
@@ -695,7 +690,7 @@ Combining function parameter `...` and variadic generics gives us varargs.
 ```rust
 /// Takes a variadic set of type arguments,
 /// returns those arguments collected into a tuple.
-fn collect<...Ts>(...vs: Ts) -> (...Ts) {
+fn collect<...Ts>(...vs: ...Ts) -> Ts {
     vs
 }
 
@@ -712,7 +707,7 @@ fn test_collect() {
 ```rust
 
 /// Does the same thing as `id`, but you have to pass in at least one value.
-fn collect_at_least_one<H, ...Ts>(head: H, ...tail: Ts) -> (H, ...Ts) {
+fn collect_at_least_one<H, ...Ts>(head: H, ...tail: ...Ts) -> (H, ...Ts) {
     (head, ...tail)
 }
 
@@ -730,14 +725,14 @@ Multiple variadic arguments can follow one another, but turbofish is then requir
 TODO: bikeshed above statement.
 
 ```rust
-fn double_vararg<<...Ts>, <...Us>>collect_twice(...fst: Ts, ...lst: Us) -> ((...Ts), (...Us)) {
+fn double_vararg<(...Ts), (...Us)>collect_twice(...fst: ...Ts, ...lst: ...Us) -> (Ts, Us) {
     (fst, lst)
 }
 
 #[test]
 fn test_double_vararg() {
-    assert_eq!(double_vararg::<<i32, u32>, <usize,>>(1, 2, 3), ((1, 2), (3,)));
-    assert_eq!(double_vararg::<<i32,>, <u32, usize>>(1, 2, 3), ((1,), (2, 3)));
+    assert_eq!(double_vararg::<(i32, u32), (usize,)>(1, 2, 3), ((1, 2), (3,)));
+    assert_eq!(double_vararg::<(i32,), (u32, usize)>(1, 2, 3), ((1,), (2, 3)));
 }
 ```
 
@@ -747,7 +742,7 @@ fn test_double_vararg() {
 struct Tup<...Ts>(i32, ...Ts);
 
 impl<...Ts> Tup<...Ts> {
-    fn new(i: i32, ...ts: Ts) {
+    fn new(i: i32, ...ts: ...Ts) {
         Self(i, ...ts)
     }
 
@@ -764,13 +759,13 @@ impl<...Ts> Tup<...Ts> {
 pub struct Zip<...Is>(...Is)
 
 impl<...Is> Zip<...Is> {
-    fn new(...iters: Is) {
+    fn new(...iters: ...Is) {
         Self(...iters)
     }
 }
 
 impl<...Is: Iterator> Iterator for Zip<...Is> {
-    type Item = (...for<I in Is> I::Item);
+    type Item = for<I in Is> I::Item;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next: Self::Item = static for i in self {
@@ -791,7 +786,7 @@ use  futures_util::future::{MaybeDone, maybe_done};
 pub struct Join<...Futs: Future>(#[pin] ...for<F in Futs> MaybeDone<F>);
 
 impl<...Futs> Join<...Futs> {
-    fn new(...futures: Futs) {
+    fn new(...futures: ...Futs) {
         let wrapped_futs = static for future in futures {
             maybe_done(future)
         };
@@ -801,7 +796,7 @@ impl<...Futs> Join<...Futs> {
 }
 
 impl<...Futs: Future> Future for Join<...Futs> {
-    type Output = (...for<F in Futs> F::Output);
+    type Output = for<F in Futs> F::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut all_done = true;
@@ -810,7 +805,7 @@ impl<...Futs: Future> Future for Join<...Futs> {
 
         // Long, annoying type specified for example purposes.
         // In reality, you would infer it with `(..)`.
-        let futs: (...for<F in Futs> Pin<&mut F>) = self.project();
+        let futs: for<F in Futs> Pin<&mut F> = self.project();
 
         static for fut in futs {
             all_done &= fut.poll(cx).is_ready();
@@ -835,7 +830,7 @@ impl<...Futs: Future> Future for Join<...Futs> {
 trait FnOnce<...Args> {
     type Output;
 
-    fn call_once(self, ...args: Args) -> Self::Output;
+    fn call_once(self, ...args: ...Args) -> Self::Output;
 }
 
 struct Foo;
@@ -855,8 +850,11 @@ impl FnOnce<u32, i32, i32> for Foo {
 ```rust
 // Implement non-symmetric `PartialEq` for tuples
 
-impl<...<Ts: PartialEq<Us>, Us>> PartialEq<(...for<U in Us> U)> for (...for<T in Ts> T) {
-    fn eq(&self, other: &(...for<U in Us> U)) {
+impl<...Ts; N, ...Us; N> PartialEq<Us> for Ts
+where
+    for<T, U in Ts, Us> T: PartialEq<U>,
+{
+    fn eq(&self, other: &Us) {
         static for l, r in self, other {
             if l != r {
                 return false;
@@ -870,8 +868,8 @@ impl<...<Ts: PartialEq<Us>, Us>> PartialEq<(...for<U in Us> U)> for (...for<T in
 
 ```rust
 /// Pair of tuples → tuple of pairs
-pub fn zip<...<Ts, Us>>(left: (...for<T in Ts> T), right: (...for<U in Us> U)) -> (...for<T, U in Ts, Us> (T, U)) {
-    static for l, r in left, right {
+pub fn zip<...Ts; N, ...Us; N>(pair: (Ts, Us)) -> for<T, U in Ts, Us> (T, U) {
+    static for l, r in pair.0, pair.1 {
         (l, r)
     }
 }
@@ -879,7 +877,7 @@ pub fn zip<...<Ts, Us>>(left: (...for<T in Ts> T), right: (...for<U in Us> U)) -
 
 ```rust
 /// Tuple of pairs → pair of tuples
-pub fn unzip<...<Ts, Us>>(zipped: (...for<T, U in Ts, Us> (T, U))) -> ((...for<T in Ts> T), (...for<U in Us> U)) {
+pub fn unzip<...Ts; N, ...Us; N>(zipped: for<T, U in Ts, Us> (T, U)) -> (Ts, Us) {
     // This one is a bit mind-bending.
     // TODO: could it be made more intuitive?
     static for ...elems in ...zipped {
@@ -888,13 +886,38 @@ pub fn unzip<...<Ts, Us>>(zipped: (...for<T, U in Ts, Us> (T, U))) -> ((...for<T
 }
 ```
 
+```rust
+/// MxN → NxM transformation, generalized version of `zip` and `unzip`
+pub fn pivot<...(...Tss; N)>(tup: Tss) -> for<...Ts in ...Tss> Ts {
+    static for ...elems in ...tup {
+        elems
+    }
+}
+```
+
+```rust
+/// `impl Trait`
+
+fn collect<...'as, ...Ts: Debug + ...'as>(...tup: ...for<'a, T in 'as, Ts> &'a T) -> impl Debug + 'as {
+    tup
+}
+```
+
+```rust
+/// Higher-ranked lifetime binders
+
+trait Foo;
+
+impl<...Ts; N> Foo for for<...'as; N> fn(...for<'a, T in 'as, Ts> &'a T) {}
+```
+
 ### TODO: `match` and recursion
 
-`static for` is not the only way to loop over a tuple. You can also use recursion, with `match`.
+We could potetially allow recursion to loop over the elements of a tuple.
 
 ```rust
 /// Debug-print every element of the tuple.
-fn recursive_dbg<...Ts: Debug>(ts: (...Ts)) {
+fn recursive_dbg<...Ts: Debug>(ts: Ts) {
     match ts {
         () => (),
         (head, ...tail) => {
@@ -905,11 +928,11 @@ fn recursive_dbg<...Ts: Debug>(ts: (...Ts)) {
 }
 ```
 
-Recursion also allows iterating in a different order.
+Recursion would allow iterating in a different order.
 
 ```rust
 /// Debug-print every element of the tuple, in reverse order.
-fn recursive_dbg<...Ts: Debug>(ts: (...Ts)) {
+fn recursive_dbg<...Ts: Debug>(ts: Ts) {
     match ts {
         () => (),
         (...head, tail) => {
@@ -924,7 +947,7 @@ However, how do we express this recursion at the type level?
 
 ```rust
 /// Reverse the order of the elements in the tuple.
-fn reverse_tuple<...Ts: Debug>(ts: (...Ts)) -> _ /* what do we put here? */ {
+fn reverse_tuple<...Ts: Debug>(ts: Ts) -> _ /* what do we put here? */ {
     match ts {
         () => (),
         (head, ...tail) => {
@@ -934,7 +957,7 @@ fn reverse_tuple<...Ts: Debug>(ts: (...Ts)) -> _ /* what do we put here? */ {
 }
 ```
 
-A more generalized type-level recursion mechanism/`match` would be the most flexible option, but also complex. Alternatively, we could have a set of primitives, like `Rotate<...T>` or `Reverse<...T>`, for type-level operations. Also, what restrictions would need to be imposed to make type inference tractable, and avoid post-monomorphization errors? How would unification work?
+A more generalized type-level recursion mechanism/`match` would be the most flexible option, but also complex. Alternatively, we could have a set of primitives, like `Rotate<..>` or `Reverse<..>`, for type-level operations. Also, what restrictions would need to be imposed to make type inference tractable, and avoid post-monomorphization errors? How would unification work?
 
 It's also not clear how the `match` + recursion approach could be applied to iterating over types/lifetimes/consts at the value level.
 
@@ -943,14 +966,14 @@ It's also not clear how the `match` + recursion approach could be applied to ite
 What might type-level `match` look like?
 
 ```rust
-...type Reverse<...Ts> = match Ts <
+type Reverse<Ts> = match Ts {
     // Restriction: lifetimes can't affect which branch is taken, otherwise you would have unsound specialization
-    <> => <>,
-    <Head, ...Tail> => <...Reverse<Tail>, Head>,
->;
+    () => (),
+    (Head, ...Tail) => (...Reverse<Tail>, Head),
+};
 
 /// Reverse the order of the elements in the tuple.
-fn reverse_tuple<...Ts: Debug>(ts: (...Ts)) -> (...Reverse<...Ts>) {
+fn reverse_tuple<...Ts: Debug>(ts: Ts) -> Reverse<Ts> {
     match ts {
         () => (),
         (head, ...tail) => {
@@ -960,24 +983,9 @@ fn reverse_tuple<...Ts: Debug>(ts: (...Ts)) -> (...Reverse<...Ts>) {
 }
 ```
 
-### TODO: Pack length constraints
-
-It would be desirable to allow constraining the length of a generic parameter pack. For example, to write a generalized MxN → NxM nested tuple transformation, you need to assert that all the inner tuples are of the same length. Speculative syntax:
-
-```rust
-/// Tranform MxN tuple into NxM
-//                                   ╭─ Each `Ts` in `Tss` has `N` elements
-//                                  ╭┴╮
-fn pivot<const N: usize, ...<...Tss; N >>(tuples: (...for<<...Ts> in Tss> (...Ts))) {
-    static for ...t in ...tuples {
-        t
-    }
-}
-```
-
 ### TODO: Random access
 
-It would be nice to have a way to express "get the `N`th value of this tuple, if it exists", where `N` is a const generic parameter. One would also need a type-level equivalent for generic parameter packs.
+It would be nice to have a way to express "get the `N`th value of this tuple, if it exists", where `N` is a const generic parameter. There would need to be both value-level and type-level versions of this.
 
 (People have expressed this desire in feedback to the author, but I would like to see concrete use-cases.)
 
@@ -988,8 +996,6 @@ With APIs like `futures::select`, you want to pass in N values, and get back a v
 ## TODO
 
 - [ ] Add additional advanced examples
-- [ ] Resolve inline bikeshed TODOs
-- [ ] Add desgin for:
-  - [ ] Higher-ranked and elided lifetimes
-  - [ ] `impl Trait`
+  - [ ] Elided lifetimes
   - [ ] GATs
+- [ ] Resolve inline bikeshed TODOs
