@@ -9,6 +9,7 @@
 - [x] Implementing traits for function pointers/`dyn Fn` ([stdlib](https://doc.rust-lang.org/std/primitive.fn.html#trait-implementations), [`wasm-bindgen`](https://github.com/rustwasm/wasm-bindgen/blob/f569fddb62cdeb2bb9ba230fe59d3fba143cf92c/src/convert/closures.rs))
 - [x] `#![feature(unsized_fn_params)]`
   - But don't penalize `Sized` ergonomics to accomplish it.
+- [x] [`cmp::max`](https://doc.rust-lang.org/std/cmp/fn.max.html)
 - [ ] [`frunk::HList`](https://docs.rs/frunk/latest/frunk/hlist/index.html)
 - [ ] [`futures::select`](https://docs.rs/futures/latest/futures/future/fn.select.html)
 - [ ] Other [`frunk`](https://docs.rs/frunk/latest/frunk/) use-cases?
@@ -17,7 +18,7 @@
 
 ## Design principles
 
-- Re-use existing language infrastructure and concepts when possible (tuples, pattern matching).
+- Re-use existing language infrastructure and concepts whenever possible (tuples, arrays, pattern matching).
   - "Perfection is achieved, not when there is nothing left to add, but when there is nothing left to take away."
   - But also, support library types!
 - Don't support only pre-determined special cases, support all the cases.
@@ -36,21 +37,44 @@
 
 - [C](https://en.cppreference.com/w/c/variadic)
 - [Circle](https://github.com/seanbaxter/circle/blob/master/new-circle/README.md#pack-traits)
+- [Clojure](https://clojure.org/guides/learn/functions#_multi_arity_functions)
+- [Common Lisp](http://clhs.lisp.se/Body/03_dac.htm)
+- [Crystal](https://crystal-lang.org/reference/1.8/syntax_and_semantics/default_values_named_arguments_splats_tuples_and_overloading.html#components-of-a-method-definition)
 - [C++](https://en.cppreference.com/w/cpp/language/parameter_pack)
   - [Reversing a tuple](https://stackoverflow.com/questions/17178075/how-do-i-reverse-the-order-of-element-types-in-a-tuple-type)
 - [C#](https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/params)
 - [D](https://dlang.org/spec/function.html#variadic)
+- [F#](https://learn.microsoft.com/en-us/dotnet/fsharp/language-reference/parameters-and-arguments#parameter-arrays)
+- [Go](https://go.dev/ref/spec#Passing_arguments_to_..._parameters)
+- [Haskell](https://wiki.haskell.org/Varargs)
 - [Java](https://docs.oracle.com/javase/8/docs/technotes/guides/language/varargs.html)
 - [JavaScript](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Spread_syntax)
+- [Julia](https://docs.julialang.org/en/v1/manual/functions/#Varargs-Functions)
+- [Kotlin](https://kotlinlang.org/docs/functions.html#variable-number-of-arguments-varargs)
+- [Lua](https://www.lua.org/pil/5.2.html)
+- [ML](http://mlton.org/Fold)
+- [Nim](https://nim-lang.org/docs/manual.html#types-varargs)
 - [PHP](https://www.php.net/manual/en/functions.arguments.php#functions.variable-arg-list)
+- Python ([varargs](https://docs.python.org/3/reference/compound_stmts.html#function-definitions), [variadic generics](https://peps.python.org/pep-0646/))
+- [Racket](https://docs.racket-lang.org/guide/lambda.html#%28part._rest-args%29)
+  - [Typed Racket](https://docs.racket-lang.org/ts-guide/types.html#%28part._varargs%29)
+- [R](https://cran.r-project.org/doc/manuals/r-release/R-intro.html#The-three-dots-argument)
+- [Raku](https://docs.raku.org/language/signatures#Slurpy_parameters)
 - [Ruby](https://docs.ruby-lang.org/en/3.2/syntax/calling_methods_rdoc.html#label-Array+to+Arguments+Conversion)
 - [Scala](https://docs.scala-lang.org/scala3/reference/changed-features/vararg-splices.html)
+- [Scheme](https://standards.scheme.org/corrected-r7rs/r7rs-Z-H-6.html#TAG:__tex2page_sec_4.1.4)
 - [Swift](https://github.com/apple/swift-evolution/blob/main/proposals/0393-parameter-packs.md)
+- [TCL](https://www.tcl.tk/man/tcl/TclCmd/proc.html)
+- [TypeScript](https://www.typescriptlang.org/docs/handbook/2/objects.html#tuple-types)
+- [VB.NET](https://learn.microsoft.com/en-us/dotnet/visual-basic/programming-guide/language-features/procedures/parameter-arrays)
 - [Zig](https://ziglang.org/documentation/master/#comptime)
 
 ## Other links
 
-- [Analysing variadics, and how to add them to Rust - PoignardAzur](https://poignardazur.github.io/2021/01/30/variadic-generics/)
+- [Lang team design notes](https://github.com/rust-lang/lang-team/blob/master/src/design_notes/variadic_generics_design.md)
+- [Analysing variadics, and how to add them to Rust - Olivier Faure](https://poignardazur.github.io/2021/01/30/variadic-generics/)
+- [rust-variadics-background - Alice Cecile](https://github.com/alice-i-cecile/rust-variadics-background/)
+- [[Brainstorming] Use cases for variadic generics - /r/Rust](https://www.reddit.com/r/rust/comments/l8vaa6/brainstorming_use_cases_for_variadic_generics/)
 - [More enum types - Yoshua Wuyts](https://blog.yoshuawuyts.com/more-enum-types/)
 
 ## Variadics and values
@@ -120,7 +144,7 @@ let (ref ...head, tail) = t;
 let _: (&_, &_) = head;
 
 // Match ergonomics
-let &(...head, tail) = t;
+let (...head, tail) = &t;
 // Tuple of references, not reference to tuple
 let _: (&_, &_) = head;
 ```
@@ -310,6 +334,7 @@ This proposal adds *tuple generic parameters*, which match tuples of a particula
 | Two tuple types of the same arity (TODO: bikeshed semicolon syntax)                   | `<(...Ts; N), (...Us; N)>`                               | `<(i32, isize), (u32, usize)>`       | `type Ts = (i32, isize); type Us = (u32, usize); const N: usize = 2;`                       |
 | Two tuple types of the same arity >= 1                                                | `<(T0, ...Ts; N), (U0, ...Us; N)>`                       | `<(i32, isize), (u32, usize)>`       | `type T0 = i32; type Ts = (isize,); type U0 = u32; type Us = (usize,); const N: usize = 1;` |
 | A tuple of tuples, all of the same length, specified unpacked                         | `<...(...Ts; N)>`                                        | `<(i32, i8), (u32, u8), (u64, i64)>` | `type Ts = ((i32, i8), (u32, u8), (u64, i64));`                                             |
+| A tuple of tuples, of potentially varying lengths, specified unpacked                         | `<...(...Ts)>`                                        | `<(i32, i8), (u32,)>` | `type Ts = ((i32, i8), (u32,));`                                             |
 | Two tuple types of the same arity, specified unpacked                                 | `<...Ts; N, ...Us; N>`                                   | `<i32, isize, u32, usize>`           | `type Ts = (i32, isize); type Us = (u32, usize); const N: usize = 2;`                       |
 | One tuple type, and a const generic of that type, specified unpacked (TODO: bikeshed) | `<...Ts, ...const Ns: ...Ts>`                            | `<usize, bool, 1, true>`             | `type Ts = (usize, bool); const Ns: Ts = (1, true);`                                        |
 | Two tuple types, and one const generic of each type                                   | `<(...Ts), (...Us), const Ns: Ts, const Ms: Us>`         | `<(usize,), (), (3,), ()>`           | `type Ts = (usize,); type Us = (); const Ns: Ts = (3,); const Ms: Us = ();`                 |
@@ -324,11 +349,11 @@ The "just use tuples for everything" model works well for types and consts, but 
 
 In terms of syntax, parenthesized list `('a, 'b, ...)` is out, as `()` would be ambiguous in generic argument lists—is it an empty set of lifetimes, or is that set elided and it's actually a type? This proposal uses square brackets, but there are other possibilities, for example `'('a,  'b)` (looks Lispy).
 
-As for semantics, it would be nice if a "lifetime pack", as we will call it for now, was itself a valid lifetime—just as tuples of consts and types are themselves valid consts and types. It's not clear what this lifetime should be, and maybe the symmetry isn't actually worthwhile, but for now we will say it is the union (`<'a, 'b>` = `'a + 'b`). (It could also be the interesction!)
+As for semantics, it would be nice if a "lifetime pack", as we will call it for now, was itself a valid lifetime—just as tuples of consts and types are themselves valid consts and types. It's not clear what this lifetime should be, and maybe the symmetry isn't actually worthwhile, but for now we will say it is the union (`<'a, 'b>` = `'a + 'b`). (It could also be the intersection!)
 
 ### Unsized types
 
-Variadic generics shpuld not be restricted by the layout limitations of tuples. Therefore, the rules around `Sized` need to be loosened. Specifically: a tuple type is valid whether or not any of its members are `Sized`. But, in addition to the restrictions that all unsized types have, it's not allowed to take the address of multiply-unsized tuples, nor is it allowed to pass them as function arguments (even with ``#![feature(unsized_fn_params)]`). They can be thought of as not implementing an unnameable`?Sized`-style trait.
+Variadic generics shpuld not be restricted by the layout limitations of tuples. Therefore, the rules around `Sized` need to be loosened. Specifically: a tuple type is valid whether or not any of its members are `Sized`. But, in addition to the restrictions that all unsized types have, it's not allowed to take the address of multiply-unsized tuples, nor is it allowed to pass them as function arguments (even with `#![feature(unsized_fn_params)]`). They can be thought of as not implementing an unnameable`?Sized`-style trait.
 
 Without `#![feature(unsized_fn_params)]`, you can't produce a value of a mutiply-unsized tuple at all. With the feature gate, you can do so with tuple literal syntax and varargs (explained below). You can also index into their fields, destructure them with a pattern match, unpack them with `...`, or iterate over them with `static for`.
 
@@ -388,12 +413,11 @@ assert_eq!(t, ((1, false), (2, 0), (1, 0)));
 
 ### Type-level for-in
 
-Type-level for-in maps a list of type or const tuples, or lifetime packs, to a new such tuple/pack of the same length.
-
-```rust
+Type-level for-in maps a list of type or const tuples, or lifetime packs, to a new such tuple/pack of the same length.```rust
 //     ╭─ `(Option<i32>, Option<u32>)`, but written in an overly verbose fashion.
 //    ╭┴─────────────────────────────╮
 let t: for<T in (i32, u32)> Option<T> == (Some(2), Some(3));
+
 ```
 
 ```rust
@@ -454,7 +478,7 @@ fn test_id() {
     assert_eq!(id((3,)), (3,));
     assert_eq!(id((42, "hello world")), (42, "hello world"),);
     assert_eq!(id((false, false, 0)), (false, false, 0));
-    assert_eq!(id::<[u8; 9], &str>((b"t u r b o", "f i s h")), (b"t u r b o", "f i s h"));
+    assert_eq!(id::<&[u8; 9], &str>((b"t u r b o", "f i s h")), (b"t u r b o", "f i s h"));
 }
 ```
 
@@ -470,7 +494,7 @@ fn test_id_at_least_one() {
     assert_eq!(id_at_least_one(3), (3,));
     assert_eq!(id_at_least_one((42, "hello world")), (42, "hello world"));
     assert_eq!(id_at_least_one((false, false, 0)), (false, false, 0));
-    assert_eq!(id_at_least_one::<[u8; 9], &str>((b"t u r b o", "f i s h")), (b"t u r b o", "f i s h"));
+    assert_eq!(id_at_least_one::<&[u8; 9], &str>((b"t u r b o", "f i s h")), (b"t u r b o", "f i s h"));
 }
 ```
 
@@ -494,7 +518,7 @@ fn test_option_wrap() {
     assert_eq!(option_wrap((3,)), (Some(3),));
     assert_eq!(option_wrap((42, "hello world")), (Some(42), Some("hello world")));
     assert_eq!(option_wrap((false, false, 0)), (Some(false), Some(false), Some(0)));
-    assert_eq!(option_wrap::<[u8; 9], &str>((b"t u r b o", "f i s h")), (Some(b"t u r b o"), Some("f i s h")));
+    assert_eq!(option_wrap::<&[u8; 9], &str>((b"t u r b o", "f i s h")), (Some(b"t u r b o"), Some("f i s h")));
 }
 ```
 
@@ -512,7 +536,7 @@ fn test_swing_around() {
     assert_eq!(swing_around((3,)), (3,));
     assert_eq!(swing_around((42, "hello world")), ("hello world", 42));
     assert_eq!(swing_around((false, false, 0)), (0, false, false));
-    assert_eq!(swing_around::<[u8; 9], &str>((b"t u r b o", "f i s h")), ("f i s h", b"t u r b o"));
+    assert_eq!(swing_around::<&[u8; 9], &str>((b"t u r b o", "f i s h")), ("f i s h", b"t u r b o"));
 }
 ```
 
@@ -528,7 +552,7 @@ fn test_add_one_on() {
     assert_eq!(add_one_on((3,)), (3, 17));
     assert_eq!(add_one_on((42, "hello world")), (42, "hello world", 17));
     assert_eq!(add_one_on((false, false, 0)), (false, false, 0, 17));
-    assert_eq!(add_one_on::<[u8; 9], &str>((b"t u r b o", "f i s h")), (b"t u r b o", "f i s h", 17));
+    assert_eq!(add_one_on::<&[u8; 9], &str>((b"t u r b o", "f i s h")), (b"t u r b o", "f i s h", 17));
 }
 ```
 
@@ -645,8 +669,6 @@ impl<...Ts: Default> Default for Ts {
 
 `...` patterns can also be used in function parameter lists.
 
-As is our tradition, we start with a contrived concrete example before introducing generics.
-
 ```rust
 //                    ╭─ This binding has tuple type.
 //                    │  However, in terms of calling convention,
@@ -665,7 +687,7 @@ fn collect_contrived(a: u32, b: i32) -> (u32, i32) {
 }
 ```
 
-When using a `...` binding with unsized argument types via `unsized_fn_params`, there are additional restrictions, as explained earlier.
+When using a `...` binding with unsized argument types via `unsized_fn_params`, there are additional restrictions.
 
 ```rust
 #![feature(unsized_fn_params)]
@@ -676,10 +698,19 @@ fn do_stuff_with_unsized_params(...tuple: ...([u32], dyn Debug)) {
     // The only thing you can do is index into its fields;
     // either directly, via pattern match, or with `static for`.
     // These restrictions won't be lifted even if `([u32], dyn Debug)` gets a defined layout,
-    // but they may be with `#![feature(unsized_locals)]`.
+    // and in fact even a tuple like `(u8, str)` has them,
+    // but they may be lifted with `#![feature(unsized_locals)]`.
 
     dbg!(&tuple.0[0]);
     dbg!(&tuple.1);
+}
+```
+
+`...` patterns in parameter lists also work with arrays.
+
+```rust
+fn foo(...arr: ...[i32; 3]) -> [i32, 4] {
+    [21, ..arr]
 }
 ```
 
@@ -700,7 +731,7 @@ fn test_collect() {
     assert_eq!(collect(3), (3,));
     assert_eq!(collect(42, "hello world"), (42, "hello world"));
     assert_eq!(collect(false, false, 0), (false, false, 0));
-    assert_eq!(collect::<[u8; 9], &str>(b"t u r b o", "f i s h"), (b"t u r b o", "f i s h"));
+    assert_eq!(collect::<&[u8; 9], &str>(b"t u r b o", "f i s h"), (b"t u r b o", "f i s h"));
 }
 ```
 
@@ -717,7 +748,7 @@ fn test_collect_at_least_one() {
     assert_eq!(collect_at_least_one(3), (3,));
     assert_eq!(collect_at_least_one(42, "hello world"), (42, "hello world"));
     assert_eq!(collect_at_least_one(false, false, 0), (false, false, 0));
-    assert_eq!(collect_at_least_one::<[u8; 9], &str>(b"t u r b o", "f i s h"), (b"t u r b o", "f i s h"));
+    assert_eq!(collect_at_least_one::<&[u8; 9], &str>(b"t u r b o", "f i s h"), (b"t u r b o", "f i s h"));
 }
 ```
 
@@ -733,6 +764,22 @@ fn double_vararg<(...Ts), (...Us)>collect_twice(...fst: ...Ts, ...lst: ...Us) ->
 fn test_double_vararg() {
     assert_eq!(double_vararg::<(i32, u32), (usize,)>(1, 2, 3), ((1, 2), (3,)));
     assert_eq!(double_vararg::<(i32,), (u32, usize)>(1, 2, 3), ((1,), (2, 3)));
+}
+```
+
+You can also have homogeneous varargs, using arrays:
+
+```rust
+/// Variadic version of `std::cmp::max`
+pub fn max<T: Ord, const N: usize>(fst, ...rest: [T; N]) -> T {
+    let mut max = fst;
+    static for elem in rest {
+        if elem > max {
+            max = elem;
+        }
+    }
+    
+    max
 }
 ```
 
@@ -888,7 +935,7 @@ pub fn unzip<...Ts; N, ...Us; N>(zipped: for<T, U in Ts, Us> (T, U)) -> (Ts, Us)
 
 ```rust
 /// MxN → NxM transformation, generalized version of `zip` and `unzip`
-pub fn pivot<...(...Tss; N)>(tup: Tss) -> for<...Ts in ...Tss> Ts {
+pub fn transpose<...(...Tss; N)>(tup: Tss) -> for<...Ts in ...Tss> Ts {
     static for ...elems in ...tup {
         elems
     }
@@ -961,6 +1008,8 @@ A more generalized type-level recursion mechanism/`match` would be the most flex
 
 It's also not clear how the `match` + recursion approach could be applied to iterating over types/lifetimes/consts at the value level.
 
+One final challenge is whether this approach will lead to stack usage problems.
+
 #### Type-level `match`
 
 What might type-level `match` look like?
@@ -986,6 +1035,8 @@ fn reverse_tuple<...Ts: Debug>(ts: Ts) -> Reverse<Ts> {
 ### TODO: Random access
 
 It would be nice to have a way to express "get the `N`th value of this tuple, if it exists", where `N` is a const generic parameter. There would need to be both value-level and type-level versions of this.
+
+Pattern types might help here, to constrain the index to a valid range.
 
 (People have expressed this desire in feedback to the author, but I would like to see concrete use-cases.)
 
