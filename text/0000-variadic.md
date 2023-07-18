@@ -454,12 +454,12 @@ where
 
 ### `for`-`in` type mapping
 
-`for`-`in` syntax can also be used to map existing tuple types to a new type.
+`for`-`in` syntax can also be used inside type expressions, where it can be substituted for a comma-seperated list.
 
 ```rust
 //     ╭─ `(Option<i32>, Option<u32>)`, but written in an overly verbose fashion.
-//    ╭┴─────────────────────────────╮
-let t: for<T in (i32, u32)> Option<T> == (Some(2), Some(3));
+//    ╭┴───────────────────────────────╮
+let t: (for<T in (i32, u32)> Option<T>) == (Some(2), Some(3));
 
 ```
 
@@ -471,14 +471,14 @@ let t: (for<const N: usize in (8, 12)> [bool; N]) = ([false; 3], [false; 0]);
 
 ```rust
 //     ╭─ `([bool; 3], [char; 1])`, but written in an overly verbose fashion.
-//    ╭┴────────────────────────────────────────────────────╮
-let t: for<T, const N: usize in (bool, char), (3, 1)> [T; N] = ([false; 3], ['c']);
+//    ╭┴──────────────────────────────────────────────────────╮
+let t: (for<T, const N: usize in (bool, char), (3, 1)> [T; N]) = ([false; 3], ['c']);
 ```
 
 ```rust
 //     ╭─ `(usize, (u32, i32, usize), (bool, char))`, but written in an overly verbose fashion.
-//    ╭┴──────────────────────────────────────────────────────────╮
-let t: (usize, ...for<Ts in ((u32, i32, usize), (bool, char))> Ts) = (4, (1, 7, 4), (true, 'c'));
+//    ╭┴───────────────────────────────────────────────────────╮
+let t: (usize, for<Ts in ((u32, i32, usize), (bool, char))> Ts) = (4, (1, 7, 4), (true, 'c'));
 ```
 
 ```rust
@@ -486,9 +486,9 @@ let t: (usize, ...for<Ts in ((u32, i32, usize), (bool, char))> Ts) = (4, (1, 7, 
 //
 //                                   ╭─ Map each type `T` in the tuple `Ts`
 //                                   │  to a corresponding `Option<T>`.
-//                                  ╭┴─────────────────────╮
-fn option_wrap<Ts: Tuple>(vs: Ts) -> for<T in Ts> Option<T> {
-    let wrapped: for<T in Ts> Option<T> = static for v in vs {
+//                                  ╭┴───────────────────────╮
+fn option_wrap<Ts: Tuple>(vs: Ts) -> (for<T in Ts> Option<T>) {
+    let wrapped: (for<T in Ts> Option<T>) = static for v in vs {
         Some(v)
     };
 
@@ -621,7 +621,7 @@ where
 You can use a lifetime pack as the union of the contained lifetimes by omitting the extra preceding `'`s.
 
 ```rust
-fn id<''as, Ts: Tuple>(tup: for<'a, T in ''as, Ts> &'a T) -> impl Sized + 'as
+fn id<''as, Ts: Tuple>(tup: (for<'a, T in ''as, Ts> &'a T)) -> impl Sized + 'as
 where
     for <'_, _ in ''as, Ts>:,
 {
@@ -887,7 +887,7 @@ With this proposal, you can use `..` to infer a list of type parameters.
 
 ```rust
 // `..` is equivalent to `_, _` below
-let tup: (usize, ..) = (3, false, "hello");
+let tup: (usize, ..) = (3, false, "hello");for<
 ```
 
 ### Variadics with ADTs
@@ -919,7 +919,7 @@ impl<...Is> Zip<...Is> {
 }
 
 impl<...Is: Iterator> Iterator for Zip<...Is> {
-    type Item = for<I in Is> I::Item;
+    type Item = (for<I in Is> I::Item);
 
     fn next(&mut self) -> Option<Self::Item> {
         let next: Self::Item = static for i in self {
@@ -937,7 +937,7 @@ impl<...Is: Iterator> Iterator for Zip<...Is> {
 use  futures_util::future::{MaybeDone, maybe_done};
 
 #[pin_project::project]
-pub struct Join<...Futs: Future>(#[pin] ...for<F in Futs> MaybeDone<F>);
+pub struct Join<...Futs: Future>(#[pin] for<F in Futs> MaybeDone<F>);
 
 impl<...Futs> Join<...Futs> {
     fn new(...futures: ...Futs) {
@@ -950,7 +950,7 @@ impl<...Futs> Join<...Futs> {
 }
 
 impl<...Futs: Future> Future for Join<...Futs> {
-    type Output = for<F in Futs> F::Output;
+    type Output = (for<F in Futs> F::Output);
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut all_done = true;
@@ -959,7 +959,7 @@ impl<...Futs: Future> Future for Join<...Futs> {
 
         // Long, annoying type specified for example purposes.
         // In reality, you would infer it with `(..)`.
-        let futs: for<F in Futs> Pin<&mut F> = self.project();
+        let futs: (for<F in Futs> Pin<&mut F>) = self.project();
 
         static for fut in futs {
             all_done &= fut.poll(cx).is_ready();
@@ -982,7 +982,7 @@ impl<...Futs: Future> Future for Join<...Futs> {
 
 ```rust
 /// Pair of tuples → tuple of pairs
-pub fn zip<Ts: Tuple, Us: Tuple>(pair: (Ts, Us)) -> for<T, U in Ts, Us> (T, U)
+pub fn zip<Ts: Tuple, Us: Tuple>(pair: (Ts, Us)) -> (for<T, U in Ts, Us> (T, U))
 where
     Ts::LENGTH == Us::LENGTH,
 {
@@ -994,7 +994,7 @@ where
 
 ```rust
 /// Tuple of pairs → pair of tuples
-pub fn unzip<Ts: Tuple, Us: Tuple>(zipped: for<T, U in Ts, Us> (T, U)) -> (Ts, Us) 
+pub fn unzip<Ts: Tuple, Us: Tuple>(zipped: (for<T, U in Ts, Us> (T, U))) -> (Ts, Us) 
 where
     Ts::ARITY == Us::ARITY,
 {
@@ -1008,7 +1008,7 @@ where
 
 ```rust
 /// MxN → NxM transformation, generalized version of `zip` and `unzip`
-pub fn transpose<...Tss: Tuple>(tup: Tss) -> for<...Ts in ...Tss> Ts
+pub fn transpose<...Tss: Tuple>(tup: Tss) -> (for<...Ts in ...Tss> Ts)
 where
     for<Ts in Tss> Ts: Tuple,
     // TODO: a bit mind-bending
@@ -1025,7 +1025,7 @@ where
 
 trait Foo;
 
-impl<...Ts> Foo for for<...''as where for<'_, _ in ''as, Ts>: (),> fn(...for<'a, T in 'as, Ts> &'a T) {}
+impl<...Ts> Foo for for<...''as where for<'_, _ in ''as, Ts>: (),> fn(for<'a, T in 'as, Ts> &'a T) {}
 ```
 
 ### TODO: `match` and recursion
