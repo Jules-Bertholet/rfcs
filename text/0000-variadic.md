@@ -724,11 +724,12 @@ fn test_double_vararg() {
 }
 ```
 
-`...` patterns in parameter lists also work with arrays.
+`...` patterns in parameter lists can also be used for homogeneous varargs.
 
 ```rust
 /// Variadic version of `std::cmp::max`
-pub fn max<T: Ord, const N: usize>(fst, ...rest: [T; N]) -> T {
+pub fn max<T: Ord, const N: usize>(fst, ...rest: ...[T; N]) -> T {
+    // `rest` is a tuple, though it can easily be converted to an array via `.into()`.
     let mut max = fst;
     static for elem in rest {
         if elem > max {
