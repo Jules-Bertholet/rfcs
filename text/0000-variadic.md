@@ -81,7 +81,7 @@
 
 ### `...` operator
 
-`...` ("unpack") is a prefix operator that unpacks a parenthesized list of values. It operates on tuples, tuple structs, arrays, and references to them. (For tuple structs, all the fields must be visible at the location where `...` is invoked. Also, if the struct is marked `non_exhaustive`, then unpacking only works within the defining crate.)
+`...` ("unpack") is an eager, prefix, unary operator that unpacks a parenthesized list of values. It operates on tuples, tuple structs, arrays, and references to them. (For tuple structs, all the fields must be visible at the location where `...` is invoked. Also, if the struct is marked `non_exhaustive`, then unpacking only works within the defining crate.)
 
 TODO: should it be called "unpack", "splat", "spread", or something else?
 
@@ -290,7 +290,7 @@ assert_eq!(t, ((-1, 1), (-2, 2), (-3, 3)));
 
 ### `Tuple` trait
 
-The trait `core::marker::Tuple` is implemented by the compiler for all tuples. No other impls are allowed. It has an associated constant, `const ARITY: usize`, equal to the tuple's arity. (Tuples cannot have arity greater than `usize::MAX`.)
+The trait `core::marker::Tuple` (TODO: or `core::primitive::Tuple`?) is implemented by the compiler for all tuples. No other impls are allowed. It has an associated constant, `const LENGTH: usize`, equal to the tuple's arity. (Tuples cannot have arity greater than `usize::MAX`.)
 
 ```rust
 use core::marker::Tuple;
@@ -332,7 +332,7 @@ fn id_at_least_one<H, Ts: Tuple>(tuple: (H, ...Ts)) -> (H, ...Ts) {
 #[test]
 fn test_id_at_least_one() {
     // assert_eq!(id_at_least_one(()), ()); ERROR expected at tuple of length at least one
-    assert_eq!(id_at_least_one(3), (3,));
+    assert_eq!(id_at_least_one((3,)), (3,));
     assert_eq!(id_at_least_one((42, "hello world")), (42, "hello world"));
     assert_eq!(id_at_least_one((false, false, 0)), (false, false, 0));
     assert_eq!(id_at_least_one::<&[u8; 9], (&str,)>((b"t u r b o", "f i s h")), (b"t u r b o", "f i s h"));
@@ -437,7 +437,7 @@ It also works with const-generic splattable values:
 fn foo()
 where
     // `[u32; 1]`, `[usize; 2]`,  and `[i32; 17]` must all implement `Debug`.
-    for<T, const N in (u32, usize, i32), [1, 2, 17]> [T; N]: Debug>,
+    for<T, const N in (u32, usize, i32), [1, 2, 17]> [T; N]: Debug,
 {}
 ```
 
@@ -448,7 +448,7 @@ fn foo()
 where
     // `[u32; 1]`, `[u32; 2]`, and `[u32; 17]` must all implement `Debug`.
     // (Yes, this is a contrived example)
-    for<T, const N in [u32; 3], [1, 2, 17]> [T; N]: Debug>,
+    for<T, const N in [u32; 3], [1, 2, 17]> [T; N]: Debug,
 {}
 ```
 
@@ -579,8 +579,8 @@ use std::marker::Tuple;
 //     ╭┴───╮
 fn foo< ''as >()
 where
-    // `''as` is reqiired to have length 3
-    for<'a, T in ''as, (u32, usize, i32)> &'a T: Debug>,
+    // `''as` is required to have length 3
+    for<'a, T in ''as, (u32, usize, i32)> &'a T: Debug,
 {}
 ```
 
@@ -984,7 +984,7 @@ impl<...Futs: Future> Future for Join<...Futs> {
 /// Pair of tuples → tuple of pairs
 pub fn zip<Ts: Tuple, Us: Tuple>(pair: (Ts, Us)) -> for<T, U in Ts, Us> (T, U)
 where
-    Ts::ARITY == Us::ARITY,
+    Ts::LENGTH == Us::LENGTH,
 {
     static for l, r in pair.0, pair.1 {
         (l, r)
@@ -1112,7 +1112,7 @@ Pattern types might help here, to constrain the index to a valid range.
 
 ### TODO: Variadic variant lists with enums
 
-With APIs like `futures::select`, you want to pass in N values, and get back a value corresponding to one of the `N` arguments. [Yoshua Wuyts's blog posts](https://blog.yoshuawuyts.com/more-enum-types/) explore this in detail. To support this case, one might want enum types whose variats correspnd to variadic generic parameters. But perhaps the additional complexity is not necessary; for example, in `futures::select` we could instead ask the caller to wrap the result type of their futures in an enum they define.
+With APIs like `futures::select`, you want to pass in N values, and get back a value corresponding to one of the `N` arguments. [Yoshua Wuyts's blog posts](https://blog.yoshuawuyts.com/more-enum-types/) explore this in detail. To support this case, one might want enum types whose variants correspond to variadic generic parameters. But perhaps the additional complexity is not necessary; for example, in `futures::select` we could instead ask the caller to wrap the result type of their futures in an enum they define.
 
 ## TODO
 
