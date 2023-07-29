@@ -112,17 +112,49 @@ let k: (i32, &mut usize, &mut bool) = (3, ...&mut (4, false));
 #### Arrays
 
 For arrays, `...` patterns serve as an alternative to `ident @ ..`.
-TODO: Bikeshed placement of `ref` and `mut` keywords.
 
 ```rust
 let a: [i32, 3] = [1, 2, 3];
 let [...head, tail] = a;
 assert_eq!(head, [1, 2]);
-let [ref ...head, tail] = a;
 let _: &[i32; 2] = head;
-let [ref mut ...head, tail] = a;
 let _: &mut [i32; 2] = head;
+
+// match ergonomics - `head` has type `&[i32; 2]`
+let [...head, tail] = &a;
 ```
+
+`...` patterns only support single identifiers (TODO: for now). However, you can prefix those identifiers with
+`ref` and `mut`:
+
+```rust
+let a: [i32, 3] = [1, 2, 3];
+// `head` has type `[i32; 2]`, and you can reassign the binding
+let [...mut head, tail] = a;
+// `head` has type `&[i32; 2]`
+let [...ref head, tail] = a;
+// `head` has type `&mut [i32; 2]`
+let [...ref mut head, tail] = a;
+```
+
+In addition, `ref` and `ref mut` can be placed before the ellipsis. This will result in an array of references, instead of a reference to an array.
+
+```rust
+let a: [i32, 3] = [1, 2, 3];
+// `head` has type `[&i32; 2]`
+let [ref ...head, tail] = a;
+// `head` has type `[&mut i32; 2]`
+let [ref mut ...head, tail] = a;
+
+// `head` has type `[&i32; 2]`, and you can reassign the binding
+let [ref ...mut head, tail] = a;
+// `head` has type `[&mut i32; 2]`, and you can reassign the binding
+let [ref mut ...mut head, tail] = a;
+
+//let [mut ...head, tail] = a; // ERROR
+```
+
+TODO: allow using `...` patterns with slices as well?
 
 #### Tuples
 
@@ -134,7 +166,7 @@ let (...head, tail) = t;
 assert_eq!(head, (1, 2.0));
 ```
 
-By-reference binding modes are a little special, owing to how tuples are stored in memory.
+Owing to how tuples are stored in memory, `ref` and `ref mut` are only supported before the ellipsis, resulting in a tuple of references.
 
 ```rust
 let t: (i32, f64, &str) = (1, 2.0, "hi");
@@ -150,11 +182,10 @@ let _: (&_, &_) = head;
 ```
 
 TODO: extend `ident @ ..` patterns to support this?
-TODO: allow using `...` patterns with slices as well?
 
 #### Tuple structs
 
-Same as tuples.
+`...` patterns produce tuples, and work in the same way they do with tuples.
 
 ```rust
 struct Foo(i32, f64, &str);
