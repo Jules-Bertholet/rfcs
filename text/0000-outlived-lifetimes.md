@@ -78,8 +78,8 @@ Trait objects have the same issue as function pointers; there is no way to turn
 
 ## Generic self-referential structs
 
-In current Rust, it’s difficult to properly specify generic self-referential
-structs, even with the help of `unsafe`. Using references imposes unneccessary
+In current Rust, it’s difficult to properly define generic self-referential
+structs, even with the help of `unsafe`. Using references imposes unnecessary
 restrictions:
 
 ```rust
@@ -91,7 +91,8 @@ struct DataAndView<T> {
 }
 ```
 
-To avoid these issues, it’s necessary to fall back to raw pointers:
+To avoid these issues, it’s necessary to fall back to raw pointers, which comes
+with its own problems:
 
 ```rust
 struct DataAndView<T> {
@@ -225,7 +226,14 @@ Outlived lifetimes may contain inferred generic parameters (`_` or `'_`) in
 contexts where those are permitted. However, the compiler may emit a warning in
 such cases, if the entire outlived-lifetime construct could be replaced by `'_`.
 
-Outlived lifetimes are covariant with respect to their arguments.
+Outlived lifetimes are covariant with respect to their parameters.
+
+## As a bound in RPIT
+
+When used as a bound in RPIT, outlived lifetimes capture all type parameters
+used inside them. In other words, they have the same semantics as `use<…>`, and
+therefore entirely replace that feature. Having become obsolete, `use<…>` is
+removed from the next edition.
 
 ## In type declarations
 
@@ -300,16 +308,73 @@ considered unused, which is an error:
 struct Foo<T>(&'<T> ()); // ERROR `T` is unused
 ```
 
-(This restriction exists to leave room for potentially adding additional,
-non-lifetime-related dimensions of variance to types in a future version of
-Rust.)
+## In implementations
 
-## As a bound in RPIT
+[From the description of
+E0207](https://doc.rust-lang.org/stable/error_codes/E0207.html):
 
-When used as a bound in RPIT, outlived lifetimes capture all type parameters
-used inside them. In other words, they have the same semantics as `use<…>`, and
-therefore entirely replace that feature. Having become obsolete, `use<…>` is
-removed from the next edition.
+> A type, const or lifetime parameter that is specified for `impl` is not
+> constrained.
+>
+> Erroneous code example:
+>
+> ```rust
+> struct Foo;
+>
+> impl<T: Default> Foo {
+>     // error: the type parameter `T` is not constrained by the impl trait, self
+>     // type, or predicates [E0207]
+>     fn get(&self) -> T {
+>         <T as Default>::default()
+>     }
+> }
+> ```
+>
+> Any type or const parameter of an `impl` must meet at least one of the
+> following criteria:
+>
+> - it appears in the _implementing type_ of the impl, e.g. `impl<T> Foo<T>`
+> - for a trait impl, it appears in the _implemented trait_, e.g. `impl<T>
+>   SomeTrait<T> for Foo`
+> - it is bound as an associated type, e.g. `impl<T, U> SomeTrait for T where T:
+>   AnotherTrait<AssocType=U>`
+
+For the purposes of this analysis, using a generic parameter inside `'<…>` does
+*not* constrain that parameter.
+
+## In function pointer types
+
+Outlived lifetimes may be used in higher-ranked function pointer types. However,
+similar to the ristriction from the previous section, a higher-ranked liftetime
+must appear somewhere in the argument types *ouside* an `'<…>` in order to be
+considered constrained:
+
+```rust
+type Foo = for<'a,'b> fn(&<'a, 'b> ()) -> &'a (); // ERROR[E0581] `'a` is unconstrained
+type Foo = for<'a> fn(&<'a> ()) -> &'a (); // ERROR[E0581] `'a` is unconstrained
+type Foo = for<'a> fn(&'a ()) -> &'a (); // Ok
+type Foo = for<'a,'b> fn(&'a (), &'b (), &'<'a, 'b> ()) -> &'<'a, 'b> (); // Ok
+```
+
+## In `dyn` types
+
+The same rules apply: a higher-ranked liftetime must appear somewhere in the
+trait’s generic parameters ouside* an `'<…>` in order to be considered
+constrained:
+
+```rust
+type Foo = for<'a,'b> dyn Trait<&<'a, 'b> (), Assoc = &'a ()>; // ERROR[E0582] `'a` is unconstrained
+type Foo = for<'a> dyn Trait<&<'a> (), Assoc = &'a ()>; // ERROR[E0582]`'a` is unconstrained
+type Foo = for<'a> dyn Trait<&'a (), Assoc = &'a ()>; // Ok
+type Foo = for<'a,'b> dyn Trait<&'a (), &'b (), &'<'a, 'b> (), Assoc =  &'<'a, 'b> ()>; // Ok
+```
+
+### In `impl` blocks
+
+The same rules apply: a higher-ranked liftetime must appear somewhere in the
+trait’s generic parameters ouside* an `'<…>` in order to be considered
+constrained:
+
 
 # Drawbacks
 [drawbacks]: #drawbacks
@@ -319,7 +384,7 @@ removed from the next edition.
 distinct, despite being mutual subtypes. For example, `for<'a, 'b> fn(&'a (),
 &'b ())` is a different type from `for<'a> fn(&'a (), &'a ())`. This quirk can
 lead to some very confusing borrow-check errors. This feature could expose that
-problem in more cases, depending on how much normalization the implementation
+problem in more cases, depending on how much normalization the compiler
 performs.
 - The meaning of `'<…>` is quite subtle. `T: 'a` is already a common source of
 confusion for new Rust users; this feature could make that problem worse.
@@ -331,55 +396,33 @@ churn, annoying users.
 
 ## Versus [`unsafe<…>` binders](https://hackmd.io/@compiler-errors/HkXwoBPaR)
 
-To the degree that it enables writing self-referential data structures, 
+To the degree that it enables defining ADTs with lifetimes the compiler can’t
+understand (e.g., self-references), the “unsafe binders” proposal serves as an
+alternative to this feature. Being more narrowly targeted, it has better
+ergonomics for its specific use-case, but does not address all the use-cases of
+this RFC.
 
-- Why is this design the best in the space of possible designs?
-- What other designs have been considered and what is the rationale for not choosing them?
-- What is the impact of not doing this?
-- If this is a language proposal, could this be done in a library or macro instead? Does the proposed change make Rust code easier or harder to read, understand, and maintain?
+There is no conflict between the two features, and Rust could potentially adopt
+both.
+
+## Versus a different syntax
 
 # Prior art
 [prior-art]: #prior-art
 
-Discuss prior art, both the good and the bad, in relation to this proposal.
-A few examples of what this can include are:
-
-- For language, library, cargo, tools, and compiler proposals: Does this feature exist in other programming languages and what experience have their community had?
-- For community proposals: Is this done by some other community and what were their experiences with it?
-- For other teams: What lessons can we learn from what other communities have done here?
-- Papers: Are there any published papers or great posts that discuss this? If you have some relevant papers to refer to, this can serve as a more detailed theoretical background.
-
-This section is intended to encourage you as an author to think about the lessons from other languages, provide readers of your RFC with a fuller picture.
-If there is no prior art, that is fine - your ideas are interesting to us whether they are brand new or if it is an adaptation from other languages.
-
-Note that while precedent set by other languages is some motivation, it does not on its own motivate an RFC.
-Please also take into consideration that rust sometimes intentionally diverges from common language features.
+[RFC 3617](./3617-precise-capturing.md) is essentially a subset of this feature,
+with a slightly different syntax.
 
 # Unresolved questions
 [unresolved-questions]: #unresolved-questions
 
-
-- What parts of the design do you expect to resolve through the RFC process before this gets merged?
-- What parts of the design do you expect to resolve through the implementation of this feature before stabilization?
-- What related issues do you consider out of scope for this RFC that could be addressed in the future independently of the solution that comes out of this RFC?
+- As mentioned earlier in the “drawbacks” section, it’s unclear how much
+normalization the compiler can feasibly apply to function pointer types
+containing outlived lifetimes.
+- “Outlived lifetime” may not be the best/least confusing name for this feature,
+for use in documentation. This should be bikeshedded before stabilization.
 
 # Future possibilities
 [future-possibilities]: #future-possibilities
 
-Think about what the natural extension and evolution of your proposal would
-be and how it would affect the language and project as a whole in a holistic
-way. Try to use this section as a tool to more fully consider all possible
-interactions with the project and language in your proposal.
-Also consider how this all fits into the roadmap for the project
-and of the relevant sub-team.
-
-This is also a good place to "dump ideas", if they are out of scope for the
-RFC you are writing but otherwise related.
-
-If you have tried and cannot think of any future possibilities,
-you may simply state that you cannot think of anything.
-
-Note that having something written down in the future-possibilities section
-is not a reason to accept the current or a future RFC; such notes should be
-in the section on motivation or rationale in this or subsequent RFCs.
-The section merely provides additional information.
+None.
